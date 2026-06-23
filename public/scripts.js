@@ -679,10 +679,23 @@ function init(data){
       .chatPoll(AUTH.token, room);
   }
 
+  function cOptimisticAppend(text){
+    var log=$('chatLog'); if(!log) return;
+    var empty=log.querySelector('.chat-empty'); if(empty) empty.remove();
+    var div=document.createElement('div');
+    div.className='crow mine';
+    div.innerHTML='<span class="cav" style="background:'+cColor(AUTH.name)+'">'+esc(cInit(AUTH.name))+'</span>'+
+      '<div class="cbub"><div class="cmeta">Bạn · '+cHHMM(Date.now())+'</div>'+
+      '<div class="ctxt">'+esc(text)+'</div></div>';
+    log.appendChild(div);
+    log.scrollTop=log.scrollHeight;
+  }
+
   function cSend(){
     var inp=$('chatMsg'), text=inp.value.trim();
     if(!text || !AUTH.token) return;
     inp.value='';
+    cOptimisticAppend(text);
     google.script.run.withSuccessHandler(cPoll).withFailureHandler(function(){}).chatSend(AUTH.token, room, text);
   }
 
