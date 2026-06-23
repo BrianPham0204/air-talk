@@ -1,7 +1,6 @@
 import { redis } from '../../lib/redis';
 import { buildFingerprint } from '../../lib/sheets';
 import { google } from 'googleapis';
-import { GoogleGenerativeAI } from '@google/generative-ai';
 
 const COLS = [
   'code','category','keyword','tags','summary_main','when_to_use','check','script_en',
@@ -38,15 +37,9 @@ async function getFingerprint() {
   return fp;
 }
 
-async function callGemini(docText, existingCodes) {
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
-  let lastErr;
-  for (const modelName of MODELS) {
-    try {
-      const model = genAI.getGenerativeModel({ model: modelName });
-
+async function callGroq(docText, existingCodes) {
   const codeList = Object.keys(existingCodes).join(', ');
+  const today = TODAY();
 
   const prompt = `Bạn là trợ lý xử lý policy cho AirTalk CS.
 
@@ -54,7 +47,7 @@ async function callGemini(docText, existingCodes) {
 ${codeList}
 
 ## Tài liệu mới:
-${docText.slice(0, 30000)}
+${docText.slice(0, 28000)}
 
 ## Nhiệm vụ:
 Đọc tài liệu, trích xuất từng tình huống/chính sách, cấu trúc thành records 18 cột:
@@ -63,7 +56,7 @@ code | category | keyword | tags | summary_main | when_to_use | check | script_e
 Quy tắc:
 - code: chữ thường, dùng dấu gạch ngang (vd: esim-transfer). Flow node: {tree-code}_{nodeId}
 - status: luôn "needs-review"
-- last_updated: ${TODAY()}
+- last_updated: ${today}
 - source_file: tên file/tài liệu nguồn nếu biết
 - Các cột hot, tree_code, node_id, node_type, options, flagged: để trống nếu không rõ
 
@@ -72,47 +65,34 @@ Phân loại mỗi record:
 - "replace": code ĐÃ CÓ trong existing codes → thay thế
 - "need-check": mâu thuẫn, thiếu thông tin, không chắc
 
-Trả về CHỈ một JSON array, không có text khác:
-[
-  {
-    "action": "add",
-    "note": "lý do ngắn",
-    "record": {
-      "code": "...",
-      "category": "...",
-      "keyword": "...",
-      "tags": "...",
-      "summary_main": "...",
-      "when_to_use": "...",
-      "check": "...",
-      "script_en": "...",
-      "source_file": "...",
-      "source_link": "",
-      "status": "needs-review",
-      "last_updated": "${TODAY()}",
-      "hot": "",
-      "tree_code": "",
-      "node_id": "",
-      "node_type": "",
-      "options": "",
-      "flagged": ""
-    }
-  }
-]`;
+Trả về CHỈ một JSON array hợp lệ, không markdown, không text thêm:
+[{"action":"add","note":"lý do","record":{"code":"...","category":"...","keyword":"...","tags":"...","summary_main":"...","when_to_use":"...","check":"...","script_en":"...","source_file":"...","source_link":"","status":"needs-review","last_updated":"${today}","hot":"","tree_code":"","node_id":"","node_type":"","options":"","flagged":""}}]`;
 
-      const result = await model.generateContent(prompt);
-      const text = result.response.text();
-      const m = text.match(/\[[\s\S]*\]/);
-      if (!m) throw new Error('AI không trả về JSON hợp lệ');
-      return JSON.parse(m[0]);
-    } catch (e) {
-      const msg = e.message || '';
-      const isRetryable = msg.includes('503') || msg.includes('overloaded') || msg.includes('high demand') || msg.includes('429');
-      if (!isRetryable) throw e;
-      lastErr = e;
-    }
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.1,
+      max_tokens: 8192,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Groq ${res.status}: ${err.slice(0, 300)}`);
   }
-  throw lastErr;
+
+  const data = await res.json();
+  const text = data.choices?.[0]?.message?.content || '';
+
+  const m = text.match(/\[[\s\S]*\]/);
+  if (!m) throw new Error('AI không trả về JSON hợp lệ');
+  return JSON.parse(m[0]);
 }
 
 export default async function handler(req, res) {
@@ -132,8 +112,7 @@ export default async function handler(req, res) {
   try {
     docText = await fetchDocText(docId);
   } catch (e) {
-    const msg = e.message || '';
-    return res.status(400).json({ error: 'Không đọc được file: ' + msg });
+    return res.status(400).json({ error: 'Không đọc được file: ' + e.message });
   }
 
   let fp;
@@ -145,12 +124,11 @@ export default async function handler(req, res) {
 
   let records;
   try {
-    records = await callGemini(docText, fp.codes);
+    records = await callGroq(docText, fp.codes);
   } catch (e) {
     return res.status(500).json({ error: 'Lỗi AI: ' + e.message });
   }
 
-  // Normalize — ensure all 18 cols exist
   records = records.map(r => {
     const rec = r.record || {};
     COLS.forEach(c => { if (rec[c] == null) rec[c] = ''; });
