@@ -40,7 +40,11 @@ async function getFingerprint() {
 
 async function callGemini(docText, existingCodes) {
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  const MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+  let lastErr;
+  for (const modelName of MODELS) {
+    try {
+      const model = genAI.getGenerativeModel({ model: modelName });
 
   const codeList = Object.keys(existingCodes).join(', ');
 
@@ -96,12 +100,19 @@ Trả về CHỈ một JSON array, không có text khác:
   }
 ]`;
 
-  const result = await model.generateContent(prompt);
-  const text = result.response.text();
-
-  const m = text.match(/\[[\s\S]*\]/);
-  if (!m) throw new Error('AI không trả về JSON hợp lệ');
-  return JSON.parse(m[0]);
+      const result = await model.generateContent(prompt);
+      const text = result.response.text();
+      const m = text.match(/\[[\s\S]*\]/);
+      if (!m) throw new Error('AI không trả về JSON hợp lệ');
+      return JSON.parse(m[0]);
+    } catch (e) {
+      const msg = e.message || '';
+      const isRetryable = msg.includes('503') || msg.includes('overloaded') || msg.includes('high demand') || msg.includes('429');
+      if (!isRetryable) throw e;
+      lastErr = e;
+    }
+  }
+  throw lastErr;
 }
 
 export default async function handler(req, res) {
