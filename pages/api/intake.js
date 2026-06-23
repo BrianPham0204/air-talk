@@ -1,6 +1,7 @@
 import { redis } from '../../lib/redis';
 import { buildFingerprint } from '../../lib/sheets';
 import { google } from 'googleapis';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 export const config = { maxDuration: 60 };
 
@@ -39,98 +40,41 @@ async function getFingerprint() {
   return fp;
 }
 
-const CHUNK_CHARS = 7000; // ~2300 tokens content per chunk
-const CHUNK_MODEL = 'llama-3.1-8b-instant'; // 20k TPM free tier
-
-function chunkText(text, size) {
-  const chunks = [];
-  for (let i = 0; i < text.length; i += size) {
-    chunks.push(text.slice(i, i + size));
-  }
-  return chunks;
-}
-
-async function callGroqChunk(chunk, chunkIdx, totalChunks, codeList, existingCodesCount) {
+async function callGemini(docText, existingCodes) {
+  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
   const today = TODAY();
-  const prompt = `Bạn là trợ lý xử lý policy cho AirTalk CS.
-Đây là phần ${chunkIdx + 1}/${totalChunks} của tài liệu.
+  const codeList = Object.keys(existingCodes).join(', ');
 
-## Existing policy codes (${existingCodesCount} codes):
+  const prompt = `Bạn là trợ lý xử lý policy cho AirTalk CS.
+
+## Existing policy codes (${Object.keys(existingCodes).length} codes):
 ${codeList}
 
-## Nội dung tài liệu (phần ${chunkIdx + 1}/${totalChunks}):
-${chunk}
+## Tài liệu mới:
+${docText.slice(0, 80000)}
 
 ## Nhiệm vụ:
-Trích xuất các tình huống/chính sách từ phần này → cấu trúc thành records 18 cột:
+Đọc tài liệu, trích xuất từng tình huống/chính sách, cấu trúc thành records 18 cột:
 code | category | keyword | tags | summary_main | when_to_use | check | script_en | source_file | source_link | status | last_updated | hot | tree_code | node_id | node_type | options | flagged
 
 Quy tắc:
-- code: chữ thường, dùng dấu gạch ngang (vd: esim-transfer)
+- code: chữ thường, dùng dấu gạch ngang (vd: esim-transfer). Flow node: {tree-code}_{nodeId}
 - status: luôn "needs-review", last_updated: ${today}
-- Phân loại: "add" (code mới), "replace" (code đã có), "need-check" (không chắc)
-- Nếu phần này không chứa policy nào rõ ràng, trả về []
+- source_file: tên file/tài liệu nguồn nếu biết
+- hot, tree_code, node_id, node_type, options, flagged: để trống nếu không rõ
+- "add": code CHƯA CÓ → thêm mới
+- "replace": code ĐÃ CÓ → thay thế
+- "need-check": mâu thuẫn hoặc không chắc
 
-Trả về CHỈ JSON array, không markdown:
+Trả về CHỈ JSON array, không markdown, không text thêm:
 [{"action":"add","note":"lý do","record":{"code":"...","category":"...","keyword":"...","tags":"...","summary_main":"...","when_to_use":"...","check":"...","script_en":"...","source_file":"...","source_link":"","status":"needs-review","last_updated":"${today}","hot":"","tree_code":"","node_id":"","node_type":"","options":"","flagged":""}}]`;
 
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: CHUNK_MODEL,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.1,
-        max_tokens: 4096,
-      }),
-    });
-
-    if (res.status === 429) {
-      const errText = await res.text();
-      const retryMatch = errText.match(/try again in ([\d.]+)s/);
-      const wait = retryMatch ? Math.ceil(parseFloat(retryMatch[1])) * 1000 + 1000 : 15000;
-      await new Promise(r => setTimeout(r, wait));
-      continue;
-    }
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Groq ${res.status}: ${err.slice(0, 300)}`);
-    }
-
-    const data = await res.json();
-    const text = data.choices?.[0]?.message?.content || '';
-    const m = text.match(/\[[\s\S]*\]/);
-    if (!m) return [];
-    try { return JSON.parse(m[0]); } catch { return []; }
-  }
-  return [];
-}
-
-async function callGroq(docText, existingCodes) {
-  const codeList = Object.keys(existingCodes).join(', ');
-  const chunks = chunkText(docText, CHUNK_CHARS);
-
-  const allRecords = [];
-  const seenCodes = new Set();
-
-  for (let i = 0; i < chunks.length; i++) {
-    const records = await callGroqChunk(chunks[i], i, chunks.length, codeList, Object.keys(existingCodes).length);
-    for (const r of records) {
-      const code = r.record?.code;
-      if (code && seenCodes.has(code)) continue; // deduplicate
-      if (code) seenCodes.add(code);
-      allRecords.push(r);
-    }
-    // Wait between chunks to stay within 20k TPM of llama-3.1-8b-instant
-    if (i < chunks.length - 1) await new Promise(r => setTimeout(r, 5000));
-  }
-
-  return allRecords;
+  const result = await model.generateContent(prompt);
+  const text = result.response.text();
+  const m = text.match(/\[[\s\S]*\]/);
+  if (!m) throw new Error('AI không trả về JSON hợp lệ');
+  return JSON.parse(m[0]);
 }
 
 export default async function handler(req, res) {
@@ -162,7 +106,7 @@ export default async function handler(req, res) {
 
   let records;
   try {
-    records = await callGroq(docText, fp.codes);
+    records = await callGemini(docText, fp.codes);
   } catch (e) {
     return res.status(500).json({ error: 'Lỗi AI: ' + e.message });
   }
