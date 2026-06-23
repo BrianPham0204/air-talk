@@ -39,7 +39,8 @@ async function getFingerprint() {
   return fp;
 }
 
-const CHUNK_CHARS = 9000; // ~3000 tokens, leaves room for prompt + output
+const CHUNK_CHARS = 7000; // ~2300 tokens content per chunk
+const CHUNK_MODEL = 'llama-3.1-8b-instant'; // 20k TPM free tier
 
 function chunkText(text, size) {
   const chunks = [];
@@ -73,30 +74,41 @@ Quy tắc:
 Trả về CHỈ JSON array, không markdown:
 [{"action":"add","note":"lý do","record":{"code":"...","category":"...","keyword":"...","tags":"...","summary_main":"...","when_to_use":"...","check":"...","script_en":"...","source_file":"...","source_link":"","status":"needs-review","last_updated":"${today}","hot":"","tree_code":"","node_id":"","node_type":"","options":"","flagged":""}}]`;
 
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.1,
-      max_tokens: 4096,
-    }),
-  });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: CHUNK_MODEL,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.1,
+        max_tokens: 4096,
+      }),
+    });
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Groq ${res.status}: ${err.slice(0, 300)}`);
+    if (res.status === 429) {
+      const errText = await res.text();
+      const retryMatch = errText.match(/try again in ([\d.]+)s/);
+      const wait = retryMatch ? Math.ceil(parseFloat(retryMatch[1])) * 1000 + 1000 : 15000;
+      await new Promise(r => setTimeout(r, wait));
+      continue;
+    }
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Groq ${res.status}: ${err.slice(0, 300)}`);
+    }
+
+    const data = await res.json();
+    const text = data.choices?.[0]?.message?.content || '';
+    const m = text.match(/\[[\s\S]*\]/);
+    if (!m) return [];
+    try { return JSON.parse(m[0]); } catch { return []; }
   }
-
-  const data = await res.json();
-  const text = data.choices?.[0]?.message?.content || '';
-  const m = text.match(/\[[\s\S]*\]/);
-  if (!m) return [];
-  try { return JSON.parse(m[0]); } catch { return []; }
+  return [];
 }
 
 async function callGroq(docText, existingCodes) {
@@ -114,8 +126,8 @@ async function callGroq(docText, existingCodes) {
       if (code) seenCodes.add(code);
       allRecords.push(r);
     }
-    // Small delay between chunks to respect TPM limits
-    if (i < chunks.length - 1) await new Promise(r => setTimeout(r, 1500));
+    // Wait between chunks to stay within 20k TPM of llama-3.1-8b-instant
+    if (i < chunks.length - 1) await new Promise(r => setTimeout(r, 5000));
   }
 
   return allRecords;
