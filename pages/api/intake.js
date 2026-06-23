@@ -1,7 +1,6 @@
 import { redis } from '../../lib/redis';
 import { buildFingerprint } from '../../lib/sheets';
 import { google } from 'googleapis';
-import { GoogleGenerativeAI } from '@google/generative-ai';
 
 export const config = { maxDuration: 60 };
 
@@ -40,12 +39,7 @@ async function getFingerprint() {
   return fp;
 }
 
-async function callGemini(docText, existingCodes) {
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel(
-    { model: 'gemini-1.5-flash-latest' },
-    { apiVersion: 'v1' }
-  );
+async function callOpenAI(docText, existingCodes) {
   const today = TODAY();
   const codeList = Object.keys(existingCodes).join(', ');
 
@@ -66,18 +60,37 @@ Quy tắc:
 - status: luôn "needs-review", last_updated: ${today}
 - source_file: tên file/tài liệu nguồn nếu biết
 - hot, tree_code, node_id, node_type, options, flagged: để trống nếu không rõ
-- "add": code CHƯA CÓ → thêm mới
-- "replace": code ĐÃ CÓ → thay thế
+- "add": code CHƯA CÓ trong existing codes → thêm mới
+- "replace": code ĐÃ CÓ trong existing codes → thay thế
 - "need-check": mâu thuẫn hoặc không chắc
 
-Trả về CHỈ JSON array, không markdown, không text thêm:
-[{"action":"add","note":"lý do","record":{"code":"...","category":"...","keyword":"...","tags":"...","summary_main":"...","when_to_use":"...","check":"...","script_en":"...","source_file":"...","source_link":"","status":"needs-review","last_updated":"${today}","hot":"","tree_code":"","node_id":"","node_type":"","options":"","flagged":""}}]`;
+Trả về JSON object với key "records" chứa array:
+{"records":[{"action":"add","note":"lý do","record":{"code":"...","category":"...","keyword":"...","tags":"...","summary_main":"...","when_to_use":"...","check":"...","script_en":"...","source_file":"...","source_link":"","status":"needs-review","last_updated":"${today}","hot":"","tree_code":"","node_id":"","node_type":"","options":"","flagged":""}}]}`;
 
-  const result = await model.generateContent(prompt);
-  const text = result.response.text();
-  const m = text.match(/\[[\s\S]*\]/);
-  if (!m) throw new Error('AI không trả về JSON hợp lệ');
-  return JSON.parse(m[0]);
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.1,
+      max_tokens: 8192,
+      response_format: { type: 'json_object' },
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`OpenAI ${res.status}: ${err.slice(0, 300)}`);
+  }
+
+  const data = await res.json();
+  const text = data.choices?.[0]?.message?.content || '{}';
+  const parsed = JSON.parse(text);
+  return parsed.records || [];
 }
 
 export default async function handler(req, res) {
@@ -109,7 +122,7 @@ export default async function handler(req, res) {
 
   let records;
   try {
-    records = await callGemini(docText, fp.codes);
+    records = await callOpenAI(docText, fp.codes);
   } catch (e) {
     return res.status(500).json({ error: 'Lỗi AI: ' + e.message });
   }
