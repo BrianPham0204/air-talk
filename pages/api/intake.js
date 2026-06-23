@@ -39,7 +39,7 @@ async function getFingerprint() {
   return fp;
 }
 
-async function callOpenAI(docText, existingCodes) {
+async function callGemini(docText, existingCodes) {
   const today = TODAY();
   const codeList = Object.keys(existingCodes).join(', ');
 
@@ -64,33 +64,31 @@ Quy tắc:
 - "replace": code ĐÃ CÓ trong existing codes → thay thế
 - "need-check": mâu thuẫn hoặc không chắc
 
-Trả về JSON object với key "records" chứa array:
-{"records":[{"action":"add","note":"lý do","record":{"code":"...","category":"...","keyword":"...","tags":"...","summary_main":"...","when_to_use":"...","check":"...","script_en":"...","source_file":"...","source_link":"","status":"needs-review","last_updated":"${today}","hot":"","tree_code":"","node_id":"","node_type":"","options":"","flagged":""}}]}`;
+Trả về CHỈ JSON array, không markdown, không text thêm:
+[{"action":"add","note":"lý do","record":{"code":"...","category":"...","keyword":"...","tags":"...","summary_main":"...","when_to_use":"...","check":"...","script_en":"...","source_file":"...","source_link":"","status":"needs-review","last_updated":"${today}","hot":"","tree_code":"","node_id":"","node_type":"","options":"","flagged":""}}]`;
 
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.1,
-      max_tokens: 8192,
-      response_format: { type: 'json_object' },
-    }),
-  });
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.1, maxOutputTokens: 8192 },
+      }),
+    }
+  );
 
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`OpenAI ${res.status}: ${err.slice(0, 300)}`);
+    throw new Error(`Gemini ${res.status}: ${err.slice(0, 400)}`);
   }
 
   const data = await res.json();
-  const text = data.choices?.[0]?.message?.content || '{}';
-  const parsed = JSON.parse(text);
-  return parsed.records || [];
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  const m = text.match(/\[[\s\S]*\]/);
+  if (!m) throw new Error('AI không trả về JSON hợp lệ');
+  return JSON.parse(m[0]);
 }
 
 export default async function handler(req, res) {
@@ -122,7 +120,7 @@ export default async function handler(req, res) {
 
   let records;
   try {
-    records = await callOpenAI(docText, fp.codes);
+    records = await callGemini(docText, fp.codes);
   } catch (e) {
     return res.status(500).json({ error: 'Lỗi AI: ' + e.message });
   }
