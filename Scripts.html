@@ -1,0 +1,454 @@
+<script>
+/* ══ STATE ══ */
+var S={
+  policies:[],cats:{},pinned:null,scopes:['all'],
+  facet:{field:null,value:null},density:'compact',collapsed:{},
+  catOpen:true,scopesOpen:false,width:'default',
+  processes:[],activeFlow:null,
+  wfActive:null,wfHidden:{},dimMode:true
+};
+var SCOPES=[
+  {k:'all',label:'Tất cả'},{k:'keyword',label:'Keyword'},{k:'code',label:'Code'},
+  {k:'tags',label:'Tags'},{k:'category',label:'Category'},{k:'summary_main',label:'Ý chính'},
+  {k:'script_en',label:'Script'},{k:'when_to_use',label:'Khi nào dùng'},
+  {k:'check',label:'Cần check'},{k:'status',label:'Status'}
+];
+
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(m){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m];});}
+function asList(t){
+  t=String(t==null?'':t);
+  var r=t.indexOf('\n')>=0?t.split(/\r?\n/):t.split('*');
+  var p=r.map(function(s){return s.replace(/^[\s*•\-]+/,'').trim();}).filter(Boolean);
+  if(p.length<=1)return esc(t.trim());
+  return'<ul class="bullets">'+p.map(function(s){return'<li>'+esc(s)+'</li>';}).join('')+'</ul>';
+}
+function hexa(hex,a){var h=hex.replace('#','');return'rgba('+parseInt(h.substr(0,2),16)+','+parseInt(h.substr(2,2),16)+','+parseInt(h.substr(4,2),16)+','+a+')';}
+function catName(c){return(S.cats[c]||{}).cat_name||c;}
+function catColor(c){return(S.cats[c]||{}).color||'#7F8C8D';}
+function catOrder(c){return(S.cats[c]||{}).order||99;}
+function isHot(p){return p.hot==='TRUE'||p.hot===true;}
+function statusPill(s){
+  if(s==='verified')return'<span class="pill ok">verified</span>';
+  if(s==='needs-review')return'<span class="pill review">needs-review</span>';
+  return'<span class="pill draft">'+esc(s||'draft')+'</span>';
+}
+function parseOptions(str){
+  if(!str)return[];
+  return String(str).split('|').map(function(s){
+    s=s.trim();var i=s.lastIndexOf('>');
+    return i<0?null:{label:s.slice(0,i).trim(),dest:s.slice(i+1).trim()};
+  }).filter(Boolean);
+}
+function nodeType(n){
+  var t=String(n.node_type||'').toLowerCase();
+  if(t==='leaf'&&n.check&&n.check.trim())return'leaf-check';
+  return t||'step';
+}
+function nbadge(t){
+  var L={step:'step',question:'question',leaf:'leaf','leaf-check':'leaf ⚑'};
+  return'<span class="nbadge '+t+'">'+esc(L[t]||t)+'</span>';
+}
+
+function initResizers(){
+  function makeResizer(gridEl,gutId,cssVar,dir,min,max){
+    var g=document.getElementById(gutId);if(!g||!gridEl)return;
+    g.addEventListener('mousedown',function(e){
+      e.preventDefault();g.classList.add('drag');document.body.style.userSelect='none';
+      var x0=e.clientX,w0=parseFloat(getComputedStyle(gridEl).getPropertyValue('--'+cssVar))||400;
+      function mv(e){gridEl.style.setProperty('--'+cssVar,Math.max(min,Math.min(max,w0+(e.clientX-x0)*dir))+'px');}
+      function up(){g.classList.remove('drag');document.body.style.userSelect='';document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',up);}
+      document.addEventListener('mousemove',mv);document.addEventListener('mouseup',up);
+    });
+  }
+  makeResizer(document.getElementById('polGrid'),'g1','w-facet',1,120,360);
+  makeResizer(document.getElementById('polGrid'),'g2','w-pol-detail',-1,300,760);
+  makeResizer(document.getElementById('procWrap'),'gProc','w-proc-detail',-1,280,700);
+}
+
+function initTabs(){
+  var HINTS={
+    policies:'Gõ keyword / code / từ khoá — lọc tức thì.',
+    process:'Chọn flow → duyệt từng bước → xem detail bên phải.',
+    chat:'Nhắn cho team — danh tính lấy từ tài khoản đăng nhập.'
+  };
+  document.querySelectorAll('.tab').forEach(function(t){
+    t.onclick=function(){
+      document.querySelectorAll('.tab').forEach(function(x){x.classList.remove('on');});
+      document.querySelectorAll('.pane').forEach(function(x){x.classList.remove('on');});
+      t.classList.add('on');
+      document.getElementById('pane-'+t.dataset.pane).classList.add('on');
+      document.getElementById('tabhint').textContent=HINTS[t.dataset.pane]||'';
+      if(window.onTabChange)window.onTabChange(t.dataset.pane);
+    };
+  });
+}
+/* hook: chat tự start/stop theo tab */
+window.onTabChange=function(pane){
+  if(pane==='chat'){ if(window.startChat) startChat(); }
+  else { if(window.stopChat) stopChat(); }
+};
+
+function initWidth(){
+  var W=[{k:'default',label:'Mặc định'},{k:'wide',label:'Rộng'},{k:'full',label:'Tối đa'}];
+  var btn=document.getElementById('widthToggle');
+  function apply(){
+    var el=document.getElementById('mainwrap');
+    el.classList.remove('w-wide','w-full');
+    if(S.width==='wide')el.classList.add('w-wide');
+    else if(S.width==='full')el.classList.add('w-full');
+    var lab=(W.filter(function(x){return x.k===S.width;})[0]||{}).label;
+    btn.innerHTML='↔ Bề rộng: '+lab;
+  }
+  btn.onclick=function(){var ks=W.map(function(x){return x.k;});S.width=ks[(ks.indexOf(S.width)+1)%ks.length];apply();};
+  apply();
+}
+
+function initPolicies(){
+  var q=document.getElementById('q');
+  q.addEventListener('input',runPol);
+  q.addEventListener('keydown',function(e){if(e.key==='Enter'){var f=filterPol(qval());if(f.length)selectPol(f[0]);}});
+  var box=document.getElementById('scopes');
+  SCOPES.forEach(function(s){
+    var c=document.createElement('span');c.className='chip';c.textContent=s.label;c.dataset.k=s.k;
+    c.onclick=function(){
+      if(s.k==='all'){S.scopes=['all'];}
+      else{S.scopes=S.scopes.filter(function(x){return x!=='all';});
+        var i=S.scopes.indexOf(s.k);if(i>=0)S.scopes.splice(i,1);else S.scopes.push(s.k);
+        if(!S.scopes.length)S.scopes=['all'];}
+      syncChips();q.focus();runPol();
+    };
+    box.appendChild(c);
+  });
+  syncChips();
+  document.getElementById('scopeToggle').onclick=function(){S.scopesOpen=!S.scopesOpen;updateScopeUI();};
+  var catBtn=document.getElementById('catToggle');
+  function applyCat(){
+    document.getElementById('polGrid').classList.toggle('cat-collapsed',!S.catOpen);
+    catBtn.innerHTML=S.catOpen?'&#8249; Ẩn Category':'&#8250; Hiện Category';
+  }
+  catBtn.onclick=function(){S.catOpen=!S.catOpen;applyCat();};
+  applyCat();
+  document.querySelectorAll('.dchip').forEach(function(n){
+    n.onclick=function(){
+      S.density=n.dataset.d;
+      document.querySelectorAll('.dchip').forEach(function(m){m.classList.toggle('on',m.dataset.d===S.density);});
+      runPol();
+    };
+  });
+  runPol();
+}
+
+function syncChips(){document.querySelectorAll('.chip').forEach(function(n){n.classList.toggle('on',S.scopes.indexOf(n.dataset.k)>=0);});}
+function qval(){return document.getElementById('q').value.trim();}
+function scopeLabel(){return S.scopes.indexOf('all')>=0?'Tất cả':S.scopes.map(function(k){return(SCOPES.filter(function(s){return s.k===k;})[0]||{}).label;}).join(' + ');}
+function updateScopeUI(){
+  var box=document.getElementById('scopes');if(box)box.style.display=S.scopesOpen?'flex':'none';
+  var btn=document.getElementById('scopeToggle');
+  if(btn)btn.innerHTML='Tìm trong: <b>'+esc(scopeLabel())+'</b> '+(S.scopesOpen?'&#9652;':'&#9662;');
+}
+function fieldText(p,k){
+  if(k==='all')return[p.code,p.keyword,p.tags,p.summary_main,p.when_to_use,p.check,p.script_en,p.category,catName(p.category),p.source_file,p.status].join(' ');
+  if(k==='category')return p.category+' '+catName(p.category);
+  return String(p[k]==null?'':p[k]);
+}
+function scopeText(p){
+  return(S.scopes.indexOf('all')>=0?fieldText(p,'all'):S.scopes.map(function(k){return fieldText(p,k);}).join(' ')).toLowerCase();
+}
+function polSort(a,b){
+  if(catOrder(a.category)!==catOrder(b.category))return catOrder(a.category)-catOrder(b.category);
+  if((isHot(b)?1:0)!==(isHot(a)?1:0))return(isHot(b)?1:0)-(isHot(a)?1:0);
+  return String(a.keyword).localeCompare(String(b.keyword));
+}
+function filterPol(q){
+  var arr=S.policies.slice();
+  if(S.facet.field&&S.facet.value!=null)arr=arr.filter(function(p){return String(p[S.facet.field])===String(S.facet.value);});
+  if(!q)return arr.sort(polSort);
+  var toks=q.toLowerCase().split(/\s+/).filter(Boolean);
+  return arr.filter(function(p){var h=scopeText(p);return toks.every(function(t){return h.indexOf(t)>=0;});}).sort(polSort);
+}
+function hi(text,q){
+  var t=esc(text);if(!q)return t;
+  q.toLowerCase().split(/\s+/).filter(Boolean).forEach(function(tok){
+    var re=new RegExp('('+tok.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','ig');t=t.replace(re,'<mark>$1</mark>');
+  });
+  return t;
+}
+function renderFacets(){
+  var box=document.getElementById('facet');if(!box)return;
+  var FABLE=['category','status','source_file'];
+  var field='category';
+  for(var i=0;i<S.scopes.length;i++){if(FABLE.indexOf(S.scopes[i])>=0){field=S.scopes[i];break;}}
+  if(S.facet.field&&S.facet.field!==field)S.facet={field:null,value:null};
+  var counts={},order=[];
+  S.policies.forEach(function(p){var v=p[field];if(!v)return;if(!(v in counts)){counts[v]=0;order.push(v);}counts[v]++;});
+  if(field==='category')order.sort(function(a,b){return catOrder(a)-catOrder(b);});else order.sort();
+  var labels={category:'Category',status:'Status',source_file:'Nguồn'};
+  var html='<div class="facet-h">'+(labels[field]||field)+'</div>';
+  html+='<div class="facet-item'+(S.facet.value==null?' on':'')+'" data-v="__all__">Tất cả<span class="facet-n">'+S.policies.length+'</span></div>';
+  order.forEach(function(v){
+    var on=String(S.facet.value)===String(v)?' on':'';
+    var dot=field==='category'?'<span class="dot" style="background:'+catColor(v)+'"></span>':'';
+    html+='<div class="facet-item'+on+'" data-v="'+esc(v)+'">'+dot+esc(field==='category'?catName(v).split('/')[0].trim():v)+'<span class="facet-n">'+counts[v]+'</span></div>';
+  });
+  box.innerHTML=html;
+  box.querySelectorAll('.facet-item').forEach(function(n){
+    n.onclick=function(){
+      var v=n.getAttribute('data-v');
+      if(v==='__all__'||String(S.facet.value)===String(v))S.facet={field:null,value:null};
+      else S.facet={field:field,value:v};
+      runPol();
+    };
+  });
+}
+function runPol(){
+  renderFacets();updateScopeUI();
+  var q=qval();var items=filterPol(q);
+  document.getElementById('count').innerHTML=items.length+' kết quả'+(q?' · trong "'+esc(scopeLabel())+'"':'');
+  var list=document.getElementById('list');
+  list.className=S.density==='compact'?'compact':'';
+  list.innerHTML='';
+  var groups=[],byCat={};
+  items.forEach(function(p){if(!byCat[p.category]){byCat[p.category]={cat:p.category,items:[]};groups.push(byCat[p.category]);}byCat[p.category].items.push(p);});
+  groups.forEach(function(g){
+    var coll=!!S.collapsed[g.cat];
+    var gh=document.createElement('div');
+    gh.className='group-h'+(coll?' collapsed':'');
+    gh.innerHTML='<span class="chev">&#9656;</span><span class="dot" style="background:'+catColor(g.cat)+'"></span>'+esc(catName(g.cat))+'<span class="gcount">'+g.items.length+'</span>';
+    gh.onclick=function(){S.collapsed[g.cat]=!S.collapsed[g.cat];runPol();};
+    list.appendChild(gh);
+    if(coll)return;
+    g.items.forEach(function(p){
+      var el=document.createElement('div');
+      el.className='item'+(S.pinned&&S.pinned.code===p.code?' sel':'');
+      el.dataset.code=p.code;
+      var hot=isHot(p)?'<span class="star">&#9733;</span>':'';
+      var bc=catColor(p.category);
+      el.innerHTML='<div class="kw">'+hi(p.keyword,q)+hot+'<span class="badge" style="color:'+bc+';border-color:'+hexa(bc,.35)+';background:'+hexa(bc,.10)+'">'+esc(p.code)+'</span></div><div class="sm">'+hi(p.summary_main,q)+'</div>';
+      el.onclick=function(){selectPol(p);};
+      list.appendChild(el);
+    });
+  });
+  if(q){var ex=items.filter(function(p){return p.code.toLowerCase()===q.toLowerCase();});if(ex.length===1)selectPol(ex[0]);}
+}
+function selectPol(p){
+  S.pinned=p;
+  document.querySelectorAll('.item').forEach(function(n){n.classList.toggle('sel',n.dataset.code===p.code);});
+  renderPolDetail(p);
+  document.getElementById('polDetail').scrollTop=0;
+}
+function renderPolDetail(p){
+  var d=document.getElementById('polDetail');
+  if(!p){d.innerHTML='<div class="placeholder"><div class="big">&#129516;</div>Chọn một mục để xem chi tiết.</div>';return;}
+  var bc=catColor(p.category);
+  var hot=isHot(p)?' <span class="star">&#9733;</span>':'';
+  var script=p.script_en?asList(p.script_en):'<span style="color:var(--muted);font-style:italic">(không có script)</span>';
+  var tags=(p.tags||'').split(/[,;]/).map(function(t){t=t.trim();return t?'<span class="tag">'+esc(t)+'</span>':'';}).join('');
+  var warn=p.status==='needs-review'?'<div class="warn">&#9888; needs-review — đối chiếu doc gốc trước khi đọc cho khách.</div>':'';
+  var flowBtn='';
+  var tc=(p.tree_code&&p.tree_code.trim())?p.tree_code.trim():(function(){var d2=p.code.replace(/_/g,'-')+'-flow';return S.processes.some(function(n){return n.tree_code===d2;})?d2:null;})();
+  if(tc)flowBtn='<div onclick="goToFlow(\''+esc(tc)+'\')" class="flow-link-btn">&#127880; Xem guided flow: '+esc(tc)+' →</div>';
+  d.innerHTML=
+    '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">'+
+    '<div class="dtitle">'+esc(p.keyword)+hot+'</div>'+
+    flagBtn(p.code, p.flagged==='TRUE')+
+    '</div>'+
+    '<div class="pills"><span class="pill code-pill">'+esc(p.code)+'</span>'+
+    '<span class="pill" style="color:'+bc+';background:'+hexa(bc,.12)+'">'+esc(catName(p.category))+'</span>'+
+    statusPill(p.status)+'</div>'+warn+flowBtn+
+    '<div class="hero main"><div class="lab">Ý chính</div><div class="val">'+asList(p.summary_main)+'</div></div>'+
+    '<div class="hero script"><div class="lab">Nói với khách (script EN)</div><div class="val">'+script+'</div></div>'+
+    '<div class="more">'+
+    '<div class="row"><div class="lab">Khi nào dùng</div><div class="val">'+asList(p.when_to_use)+'</div></div>'+
+    '<div class="row"><div class="lab">Cần check gì</div><div class="val">'+asList(p.check)+'</div></div>'+
+    '<div class="row"><div class="lab">Tags</div><div class="val tags">'+tags+'</div></div>'+
+    '<div class="row"><div class="lab">Nguồn</div><div class="val"><a href="'+esc(p.source_link)+'" target="_blank">'+esc(p.source_file)+'</a> · cập nhật '+esc(p.last_updated)+'</div></div>'+
+    '</div>';
+}
+function goToFlow(tc){
+  document.querySelectorAll('.tab').forEach(function(x){x.classList.remove('on');});
+  document.querySelectorAll('.pane').forEach(function(x){x.classList.remove('on');});
+  document.querySelector('.tab[data-pane="process"]').classList.add('on');
+  document.getElementById('pane-process').classList.add('on');
+  document.getElementById('tabhint').textContent='Chọn flow → duyệt từng bước → xem detail bên phải.';
+  if(window.onTabChange)window.onTabChange('process');
+  activateFlow(tc);
+}
+
+function allFlows(){
+  var seen={},flows=[];
+  S.processes.forEach(function(n){if(n.tree_code&&!seen[n.tree_code]){seen[n.tree_code]=true;flows.push(n.tree_code);}});
+  return flows;
+}
+function initProcess(){
+  var flows=allFlows();
+  var chips=document.getElementById('flowChips');
+  if(!flows.length){chips.innerHTML='<span style="color:var(--muted);font-size:13px">Chưa có flow.</span>';return;}
+  flows.forEach(function(f){
+    var c=document.createElement('span');c.className='flow-chip';c.textContent=f;c.dataset.flow=f;
+    c.onclick=function(){activateFlow(f);};
+    chips.appendChild(c);
+  });
+  activateFlow(flows[0]);
+}
+function activateFlow(tc){
+  S.activeFlow=tc;S.wfActive=null;S.wfHidden={};
+  document.querySelectorAll('.flow-chip').forEach(function(c){c.classList.toggle('on',c.dataset.flow===tc);});
+  renderTree();
+  document.getElementById('procDetail').innerHTML='<div class="placeholder"><div class="big">&#128204;</div>Chọn một node để xem chi tiết.</div>';
+  var nodes=S.processes.filter(function(n){return n.tree_code===tc;});
+  if(nodes.length)focusNode(nodes[0].node_id);
+}
+function focusNode(nid){
+  S.wfActive=nid;
+  var tree=document.getElementById('procTree');
+  tree.classList.toggle('showall',!S.dimMode);
+  tree.querySelectorAll('.node-card').forEach(function(el){
+    var id=el.dataset.nid;
+    el.classList.remove('nc-active','nc-dim','nc-hidden');
+    if(S.wfHidden[id])el.classList.add('nc-hidden');
+    else if(id===nid)el.classList.add('nc-active');
+    else el.classList.add('nc-dim');
+    var opts=el.querySelector('.node-opts');
+    if(opts)opts.style.display=(id===nid)?'flex':'none';
+  });
+  tree.querySelectorAll('.connector-wrap').forEach(function(cw){
+    cw.style.display=(S.wfHidden[cw.dataset.next])?'none':'flex';
+  });
+  var active=tree.querySelector('.nc-active');
+  if(active)active.scrollIntoView({behavior:'smooth',block:'center'});
+  var node=S.processes.filter(function(n){return n.node_id===nid&&n.tree_code===S.activeFlow;})[0];
+  if(node){renderProcDetail(node);document.getElementById('procDetail').scrollTop=0;}
+}
+function renderTree(){
+  var tree=document.getElementById('procTree');
+  var nodes=S.processes.filter(function(n){return n.tree_code===S.activeFlow;});
+  if(!nodes.length){tree.innerHTML='<div class="placeholder">Không có node nào.</div>';return;}
+  var html='';
+  nodes.forEach(function(n,i){
+    var t=nodeType(n);
+    var opts=parseOptions(n.options);
+    html+='<div class="node-card t-'+t+' nc-dim" data-nid="'+esc(n.node_id)+'">';
+    html+='<div class="node-meta"><span class="nid">'+esc(n.node_id)+'</span>'+nbadge(t)+'</div>';
+    html+='<div class="node-text">'+esc(n.text||n.summary_main)+'</div>';
+    if(opts.length){
+      html+='<div class="node-opts" style="display:none">';
+      opts.forEach(function(o){html+='<span class="opt-pill" data-dest="'+esc(o.dest)+'">'+esc(o.label)+'</span>';});
+      html+='</div>';
+    }
+    html+='</div>';
+    if(i<nodes.length-1)html+='<div class="connector-wrap" data-next="'+esc(nodes[i+1].node_id)+'"><div class="connector"></div></div>';
+  });
+  tree.innerHTML=html;
+  tree.querySelectorAll('.node-card').forEach(function(el){
+    el.addEventListener('click',function(e){
+      if(e.target.classList.contains('opt-pill'))return;
+      var nid=el.dataset.nid;
+      if(nid===S.wfActive)return;
+      var nodeList=S.processes.filter(function(n){return n.tree_code===S.activeFlow;});
+      var idx=nodeList.findIndex(function(n){return n.node_id===nid;});
+      if(idx>=0)nodeList.slice(idx).forEach(function(n){delete S.wfHidden[n.node_id];});
+      focusNode(nid);
+    });
+  });
+  tree.querySelectorAll('.opt-pill').forEach(function(btn){
+    btn.addEventListener('click',function(e){
+      e.stopPropagation();
+      var dest=btn.dataset.dest;
+      var activeNode=S.processes.filter(function(n){return n.node_id===S.wfActive&&n.tree_code===S.activeFlow;})[0];
+      if(activeNode)parseOptions(activeNode.options).forEach(function(o){if(o.dest!==dest)S.wfHidden[o.dest]=true;});
+      focusNode(dest);
+    });
+  });
+}
+function setDimMode(on){
+  S.dimMode=on;
+  document.getElementById('dc-dim').classList.toggle('on',on);
+  document.getElementById('dc-all').classList.toggle('on',!on);
+  if(S.wfActive)focusNode(S.wfActive);
+}
+function renderProcDetail(n){
+  var d=document.getElementById('procDetail');
+  var t=nodeType(n);
+  var opts=parseOptions(n.options);
+  var script=n.script_en&&n.script_en.trim()?asList(n.script_en):'<span style="color:var(--muted);font-style:italic">(không có script)</span>';
+  var warn=(n.check&&n.check.trim())?'<div class="warn">&#9888; '+esc(n.check)+'</div>':'';
+  var optsHtml='';
+  if(opts.length){
+    optsHtml='<div class="hero main" style="margin-top:12px"><div class="lab">Lựa chọn</div>'+
+      '<table class="opts-table">'+
+      opts.map(function(o){return'<tr><td>'+esc(o.label)+'</td><td class="arr-cell">→</td>'+
+        '<td><span class="nid" style="cursor:pointer" onclick="jumpTo(\''+esc(o.dest)+'\')">'+esc(o.dest)+'</span></td></tr>';}).join('')+
+      '</table></div>';
+  }
+  d.innerHTML=
+    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">'+
+    '<span class="nid">'+esc(n.node_id)+'</span>'+nbadge(t)+statusPill(n.status)+'</div>'+
+    '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">'+
+    '<div class="proc-dtitle">'+esc(n.text||n.summary_main)+'</div>'+
+    flagBtn(n.code, n.flagged==='TRUE')+
+    '</div>'+
+    warn+optsHtml+
+    '<div class="hero script" style="margin-top:12px"><div class="lab">Script / hướng dẫn</div><div class="val">'+script+'</div></div>'+
+    '<div class="more">'+
+    (n.when_to_use&&n.when_to_use.trim()?'<div class="row"><div class="lab">Khi nào</div><div class="val">'+asList(n.when_to_use)+'</div></div>':'')+
+    '<div class="row"><div class="lab">Nguồn</div><div class="val">'+
+    (n.source_link?'<a href="'+esc(n.source_link)+'" target="_blank">'+esc(n.source_file)+'</a>':esc(n.source_file||'—'))+
+    ' · '+esc(n.last_updated||'')+'</div></div></div>';
+}
+function jumpTo(nid){
+  var nodeList=S.processes.filter(function(n){return n.tree_code===S.activeFlow;});
+  var idx=nodeList.findIndex(function(n){return n.node_id===nid;});
+  if(idx>=0)nodeList.slice(idx).forEach(function(n){delete S.wfHidden[n.node_id];});
+  focusNode(nid);
+  var el=document.querySelector('#procTree [data-nid="'+nid+'"]');
+  if(el)el.scrollIntoView({behavior:'smooth',block:'center'});
+}
+
+function flagBtn(code, isFlagged){
+  var cls='flag-btn'+(isFlagged?' on':'');
+  var title=isFlagged?'Bỏ đánh dấu':'Đánh dấu cần xem lại';
+  var icon=isFlagged?'★':'☆';
+  return '<button class="'+cls+'" id="flagBtn_'+esc(code)+'" data-code="'+esc(code)+'" onclick="toggleFlag(this.dataset.code)" title="'+title+'">'+icon+'</button>';
+}
+function toggleFlag(code){
+  var btn=document.getElementById('flagBtn_'+code);
+  if(!btn)return;
+  var nowFlagged=btn.classList.contains('on');
+  var newVal=!nowFlagged;
+  btn.classList.add('loading');
+  google.script.run
+    .withSuccessHandler(function(){
+      btn.classList.remove('loading');
+      btn.classList.toggle('on',newVal);
+      btn.innerHTML=newVal?'★':'☆';
+      btn.title=newVal?'Bỏ đánh dấu':'Đánh dấu cần xem lại';
+      var all=S.policies.concat(S.processes);
+      var rec=all.filter(function(r){return r.code===code;})[0];
+      if(rec)rec.flagged=newVal?'TRUE':'FALSE';
+      showToast(newVal?'⭐ Đã đánh dấu — xem lại trong sheet "policies" cột flagged':'Đã bỏ đánh dấu');
+    })
+    .withFailureHandler(function(e){
+      btn.classList.remove('loading');
+      showToast('Lỗi: '+e.message);
+    })
+    .setFlag(AUTH.token, code, newVal);
+}
+function showToast(msg){
+  var t=document.getElementById('flagToast');
+  t.textContent=msg;t.classList.add('show');
+  clearTimeout(t._tid);
+  t._tid=setTimeout(function(){t.classList.remove('show');},2200);
+}
+
+/* ══ init (gọi sau khi login thành công, từ loadApp) ══ */
+function init(data){
+  S.policies=(data.policies||[]);
+  S.processes=(data.processes||[]);
+  (data.categories||[]).forEach(function(c){S.cats[c.cat_code]=c;});
+  initTabs();
+  initWidth();
+  initResizers();
+  initPolicies();
+  initProcess();
+}
+</script>

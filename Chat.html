@@ -1,0 +1,142 @@
+<!-- ════ MODULE: CHAT (tab, tự chứa CSS + markup + script) ════ -->
+<style>
+  #pane-chat .chat-card{display:flex;flex-direction:column;height:calc(100vh - 150px);min-height:420px;padding:0;overflow:hidden}
+  #pane-chat .chat-hd{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);background:linear-gradient(var(--panel),#fafdfb)}
+  #pane-chat .chat-room-in{font-size:13px;font-weight:600;border:1px solid var(--line);border-radius:999px;padding:5px 12px;outline:none;width:130px;color:var(--ink)}
+  #pane-chat .chat-room-in:focus{border-color:var(--green)}
+  #pane-chat .chat-live{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+  #pane-chat .live-dot{width:8px;height:8px;border-radius:50%;background:var(--green)}
+  #pane-chat .chat-me{font-size:12px;color:var(--muted)}
+  #pane-chat .chat-me b{color:var(--green-d)}
+  #pane-chat .snd{margin-left:auto;border:1px solid var(--line);background:#fff;border-radius:9px;padding:6px 9px;font-size:14px;cursor:pointer;color:var(--muted)}
+  #pane-chat .snd.on{background:var(--green-l);border-color:var(--green);color:var(--green-d)}
+  #pane-chat .chat-pres{display:flex;gap:6px;flex-wrap:wrap;padding:8px 16px;border-bottom:1px solid var(--line);background:#fafdfb;min-height:36px;align-items:center}
+  #pane-chat .pchip{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);background:#fff;border:1px solid var(--line);border-radius:20px;padding:3px 9px 3px 6px}
+  #pane-chat .pdot{width:7px;height:7px;border-radius:50%;background:var(--green);flex:none}
+  #pane-chat .chat-log{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+  #pane-chat .crow{display:flex;gap:9px;align-items:flex-end;max-width:80%}
+  #pane-chat .crow.mine{align-self:flex-end;flex-direction:row-reverse}
+  #pane-chat .cav{width:30px;height:30px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:700}
+  #pane-chat .cbub{background:#fff;border:1px solid var(--line);border-radius:14px;padding:8px 12px;border-bottom-left-radius:4px}
+  #pane-chat .crow.mine .cbub{background:var(--green);color:#fff;border-color:var(--green);border-bottom-left-radius:14px;border-bottom-right-radius:4px}
+  #pane-chat .cmeta{font-size:10.5px;color:var(--muted);margin-bottom:2px}
+  #pane-chat .crow.mine .cmeta{color:rgba(255,255,255,.85);text-align:right}
+  #pane-chat .ctxt{font-size:14.5px;white-space:pre-wrap;word-break:break-word}
+  #pane-chat .chat-empty{margin:auto;color:var(--muted);font-size:13.5px;text-align:center}
+  #pane-chat .chat-comp{display:flex;gap:9px;padding:12px 16px;border-top:1px solid var(--line)}
+  #pane-chat .chat-comp input{flex:1;padding:11px 13px;border:1px solid var(--line);border-radius:22px;font-size:15px;outline:none;background:#fff}
+  #pane-chat .chat-comp input:focus{border-color:var(--green)}
+  #pane-chat .chat-send{border:none;background:var(--green);color:#fff;border-radius:22px;padding:0 18px;font-weight:600;cursor:pointer}
+  #pane-chat .chat-send:hover{background:var(--green-d)}
+  #pane-chat .chat-foot{font-size:11px;color:var(--muted);text-align:center;padding:6px;border-top:1px solid var(--line);background:#fafdfb}
+</style>
+
+<div class="pane" id="pane-chat">
+  <div class="card chat-card">
+    <div class="chat-hd">
+      <input class="chat-room-in" id="chatRoom" value="cs-floor" title="Mã phòng" maxlength="24">
+      <div class="chat-live"><span class="live-dot"></span><span id="chatOnline">0</span> online</div>
+      <div class="chat-me">Bạn: <b id="chatMe">—</b></div>
+      <button class="snd on" id="chatSnd" title="Âm báo">🔔</button>
+    </div>
+    <div class="chat-pres" id="chatPres"></div>
+    <div class="chat-log" id="chatLog"></div>
+    <div class="chat-comp">
+      <input id="chatMsg" placeholder="Nhắn cho team…" maxlength="500" autocomplete="off">
+      <button class="chat-send" id="chatSendBtn">Gửi</button>
+    </div>
+    <div class="chat-foot">Lịch sử tạm · giữ 60 tin gần nhất · poll 2.5s</div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var room='cs-floor', muted=false, unread=0, primed=false, seen={}, pollT=null, actx=null, started=false;
+  function $(id){ return document.getElementById(id); }
+  function cColor(n){ var h=0; for(var i=0;i<n.length;i++) h=(h*31+n.charCodeAt(i))%360; return 'hsl('+h+' 52% 40%)'; }
+  function cInit(n){ return (String(n).trim()[0]||'?').toUpperCase(); }
+  function cHHMM(ts){ var d=new Date(ts); return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); }
+
+  function ensureAudio(){
+    try{ actx = actx || new (window.AudioContext||window.webkitAudioContext)(); }catch(e){}
+    if(actx && actx.state==='suspended'){ try{ actx.resume(); }catch(e){} }
+  }
+  function cBeep(){
+    ensureAudio();
+    if(!actx || actx.state!=='running') return;   // chưa unlock được thì thôi, không lỗi
+    [[660,0],[880,.09]].forEach(function(p){
+      var o=actx.createOscillator(), g=actx.createGain(); o.connect(g); g.connect(actx.destination);
+      o.type='sine'; o.frequency.value=p[0]; var t=actx.currentTime+p[1];
+      g.gain.setValueAtTime(.0001,t); g.gain.exponentialRampToValueAtTime(.13,t+.012); g.gain.exponentialRampToValueAtTime(.0001,t+.16);
+      o.start(t); o.stop(t+.18);
+    });
+  }
+  function cNotify(m){ if(window.Notification && Notification.permission==='granted'){ try{ new Notification('AirTalk · '+m.user,{body:m.text,tag:'airtalk-chat'}); }catch(e){} } }
+  function cTitle(){ document.title=(unread>0?'('+unread+') ':'')+'AirTalk CS Assistant'; }
+
+  function cRenderMsgs(msgs){
+    var log=$('chatLog'); var near=log.scrollHeight-log.scrollTop-log.clientHeight<80;
+    if(!msgs.length){ log.innerHTML='<div class="chat-empty">Chưa có tin nào. Chào team một câu đi.</div>'; return; }
+    log.innerHTML=msgs.map(function(m){
+      var mine=m.user===AUTH.name;
+      return '<div class="crow'+(mine?' mine':'')+'">'+
+        '<span class="cav" style="background:'+cColor(m.user)+'">'+esc(cInit(m.user))+'</span>'+
+        '<div class="cbub"><div class="cmeta">'+esc(mine?'Bạn':m.user)+' · '+cHHMM(m.ts)+'</div>'+
+        '<div class="ctxt">'+esc(m.text)+'</div></div></div>';
+    }).join('');
+    if(near) log.scrollTop=log.scrollHeight;
+    var fresh=0;
+    msgs.forEach(function(m){ if(!seen[m.id]){ seen[m.id]=1; if(primed && m.user!==AUTH.name) fresh++; } });
+    if(fresh>0){ if(!muted) cBeep(); if(document.hidden){ unread+=fresh; cTitle(); cNotify(msgs[msgs.length-1]); } }
+    primed=true;
+  }
+  function cRenderPres(online){
+    $('chatOnline').textContent=online.length;
+    $('chatPres').innerHTML=online.map(function(n){
+      return '<span class="pchip"><span class="pdot"></span>'+esc(n===AUTH.name?n+' (bạn)':n)+'</span>';
+    }).join('') || '<span class="pchip" style="border-style:dashed">Chưa ai khác online</span>';
+  }
+
+  function cPoll(){
+    if(!started || !AUTH.token) return;
+    google.script.run
+      .withSuccessHandler(function(d){ if(!d) return; cRenderMsgs(d.messages||[]); cRenderPres(d.online||[]); })
+      .withFailureHandler(function(e){
+        var m=(e&&e.message)||'';
+        if(m.indexOf('AUTH')>=0){ stopChat(); if(window.showAuth) showAuth('Phiên hết hạn, đăng nhập lại.'); }
+      })
+      .chatPoll(AUTH.token, room);
+  }
+  function cSend(){
+    var inp=$('chatMsg'), text=inp.value.trim();
+    if(!text || !AUTH.token) return;
+    inp.value='';
+    google.script.run.withSuccessHandler(cPoll).withFailureHandler(function(){}).chatSend(AUTH.token, room, text);
+  }
+
+  window.startChat=function(){
+    if(started || !AUTH.token) return;
+    started=true;
+    room=($('chatRoom').value.trim())||'cs-floor';
+    $('chatMe').textContent=AUTH.name||'—';
+    try{ actx=actx||new (window.AudioContext||window.webkitAudioContext)(); }catch(e){}
+    if(actx && actx.state==='suspended'){ try{ actx.resume(); }catch(e){} }
+    primed=false; seen={};
+    cPoll(); pollT=setInterval(cPoll, 2500);
+  };
+  window.stopChat=function(){
+    if(!started) return;
+    started=false; clearInterval(pollT);
+    if(AUTH.token){ try{ google.script.run.chatLeave(AUTH.token, room); }catch(e){} }
+  };
+
+  $('chatSendBtn').addEventListener('click', cSend);
+  $('chatMsg').addEventListener('keydown', function(e){ if(e.key==='Enter') cSend(); });
+  $('chatRoom').addEventListener('change', function(){ if(started){ stopChat(); startChat(); } });
+  $('chatSnd').addEventListener('click', function(){ muted=!muted; this.classList.toggle('on',!muted); this.textContent=muted?'🔕':'🔔'; });
+  ['click','keydown','touchstart'].forEach(function(ev){
+  document.addEventListener(ev, ensureAudio, { passive:true });
+  });
+  window.addEventListener('focus', function(){ unread=0; cTitle(); });
+})();
+</script>

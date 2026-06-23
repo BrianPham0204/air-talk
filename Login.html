@@ -1,0 +1,107 @@
+<!-- ════ MODULE: LOGIN (tự chứa CSS + markup + script) ════ -->
+<style>
+  .auth-overlay{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(180deg,#eaf4ee,#dcede3);padding:20px}
+  .auth-card{width:100%;max-width:360px;background:#fff;border:1px solid var(--line);border-radius:18px;
+    box-shadow:0 12px 44px rgba(31,45,39,.16);overflow:hidden}
+  .auth-top{height:4px;background:linear-gradient(90deg,var(--green),#7ec79b)}
+  .auth-body{padding:30px 28px 28px}
+  .auth-logo{font-weight:800;font-size:22px;color:var(--green-d)}
+  .auth-logo span{background:var(--green);color:#fff;border-radius:8px;padding:2px 8px;margin-right:8px}
+  .auth-sub{color:var(--muted);font-size:13px;margin:6px 0 22px}
+  .auth-field{margin-bottom:14px}
+  .auth-field label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px}
+  .auth-field input{width:100%;padding:12px 13px;border:1px solid var(--line);border-radius:11px;font-size:15px;outline:none;background:#fff}
+  .auth-field input:focus{border-color:var(--green);box-shadow:0 0 0 3px rgba(63,157,109,.15)}
+  .auth-btn{width:100%;padding:12px;border:none;border-radius:11px;background:var(--green);color:#fff;font-weight:700;font-size:15px;cursor:pointer;margin-top:4px}
+  .auth-btn:hover{background:var(--green-d)}
+  .auth-btn:disabled{opacity:.6;cursor:default}
+  .auth-err{color:var(--red);font-size:13px;min-height:18px;margin-top:10px;text-align:center}
+  .user-chip{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--green-d);
+    background:#fff;border:1px solid var(--line);border-radius:999px;padding:5px 6px 5px 12px;margin-left:auto}
+  .user-chip + .width-btn{margin-left:10px}
+  .uc-dot{width:8px;height:8px;border-radius:50%;background:var(--green)}
+  .uc-out{border:none;background:var(--green-l);color:var(--green-d);font-weight:700;font-size:12px;border-radius:999px;padding:5px 12px;cursor:pointer}
+  .uc-out:hover{background:var(--green);color:#fff}
+</style>
+
+<div class="auth-overlay" id="authOverlay">
+  <div class="auth-card">
+    <div class="auth-top"></div>
+    <div class="auth-body">
+      <div class="auth-logo"><span>AT</span>CS Assistant</div>
+      <div class="auth-sub">Đăng nhập để vào công cụ.</div>
+      <div class="auth-field"><label for="authUser">Tên hiển thị</label><input id="authUser" autocomplete="username"></div>
+      <!-- <div class="auth-field"><label for="authPass">Mật khẩu</label><input id="authPass" type="password" autocomplete="current-password"></div> -->
+      <button class="auth-btn" id="authBtn">Đăng nhập</button>
+      <div class="auth-err" id="authErr"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+var AUTH = { token:null, name:null, role:null };
+function authEl(id){ return document.getElementById(id); }
+function showAuth(msg){ authEl('authOverlay').style.display='flex'; authEl('authErr').textContent=msg||''; authEl('authUser').focus(); }
+function hideAuth(){ authEl('authOverlay').style.display='none'; }
+
+function doLogin(){
+  var u=authEl('authUser').value.trim();
+  if(!u){ authEl('authErr').textContent='Vui lòng nhập tên hiển thị.'; return; }
+  var btn=authEl('authBtn'); btn.disabled=true; btn.textContent='Đang đăng nhập…'; authEl('authErr').textContent='';
+  google.script.run
+    .withSuccessHandler(function(res){
+      AUTH.token=res.token; AUTH.name=res.name; AUTH.role=res.role;
+      try{ sessionStorage.setItem('at_token',res.token); sessionStorage.setItem('at_name',res.name); }catch(e){}
+      if(window.Notification && Notification.permission==='default'){ try{ Notification.requestPermission(); }catch(e){} }
+      btn.disabled=false; btn.textContent='Đăng nhập';
+      hideAuth(); mountUserChip(res.name); loadApp();
+    })
+    .withFailureHandler(function(e){
+      btn.disabled=false; btn.textContent='Đăng nhập';
+      authEl('authErr').textContent=(e&&e.message)?e.message:'Đăng nhập thất bại.';
+    })
+    .login(u);
+}
+
+function loadApp(){
+  google.script.run
+    .withSuccessHandler(init)
+    .withFailureHandler(function(e){
+      var m=(e&&e.message)||'';
+      if(m.indexOf('AUTH')>=0){ doLogout(true); showAuth('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'); }
+      else { var l=document.getElementById('list'); if(l) l.innerHTML='<div class="placeholder">Lỗi tải dữ liệu: '+esc(m)+'</div>'; }
+    })
+    .getData(AUTH.token);
+}
+
+function doLogout(silent){
+  var t=AUTH.token; AUTH.token=null; AUTH.name=null;
+  try{ sessionStorage.removeItem('at_token'); sessionStorage.removeItem('at_name'); }catch(e){}
+  if(window.stopChat) try{ stopChat(); }catch(e){}
+  if(t){ try{ google.script.run.logout(t); }catch(e){} }
+  if(!silent) location.reload();
+}
+
+function mountUserChip(name){
+  var ex=document.getElementById('userChip');
+  if(ex){ document.getElementById('userChipName').textContent=name; return; }
+  var bar=document.querySelector('.topbar'); if(!bar) return;
+  var chip=document.createElement('div'); chip.id='userChip'; chip.className='user-chip';
+  chip.innerHTML='<span class="uc-dot"></span><span id="userChipName">'+esc(name)+'</span>'+
+    '<button class="uc-out" onclick="doLogout()">Đăng xuất</button>';
+  var wbtn=document.getElementById('widthToggle');
+  if(wbtn) bar.insertBefore(chip,wbtn); else bar.appendChild(chip);
+}
+
+function authBoot(){
+  var t=null,n=null;
+  try{ t=sessionStorage.getItem('at_token'); n=sessionStorage.getItem('at_name'); }catch(e){}
+  if(t){ AUTH.token=t; AUTH.name=n; hideAuth(); mountUserChip(n||''); loadApp(); }
+  else { showAuth(); }
+}
+
+authEl('authBtn').addEventListener('click', doLogin);
+authEl('authUser').addEventListener('keydown', function(e){ if(e.key==='Enter') doLogin(); });
+window.addEventListener('DOMContentLoaded', authBoot);
+</script>
