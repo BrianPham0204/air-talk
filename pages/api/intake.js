@@ -122,9 +122,6 @@ export default async function handler(req, res) {
     docText = await fetchDocText(docId);
   } catch (e) {
     const msg = e.message || '';
-    if (msg.includes('403') || msg.includes('permission') || msg.includes('access')) {
-      return res.status(400).json({ error: 'Không có quyền đọc file. Hãy chia sẻ file với air-talk-reader@data-477613.iam.gserviceaccount.com' });
-    }
     return res.status(400).json({ error: 'Không đọc được file: ' + msg });
   }
 
