@@ -1,5 +1,5 @@
-import { redis } from '../../lib/redis';
-import { getSheetData, setSheetFlag } from '../../lib/sheets';
+import { redis } from '../../../lib/redis';
+import { getSheetData, setSheetFlag } from '../../../lib/sheets';
 
 async function requireAuth(token) {
   if (!token) throw new Error('AUTH_REQUIRED');
