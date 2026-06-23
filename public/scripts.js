@@ -191,7 +191,8 @@ function initTabs(){
   var HINTS={
     policies:'Gõ keyword / code / từ khoá — lọc tức thì.',
     process:'Chọn flow → duyệt từng bước → xem detail bên phải.',
-    chat:'Nhắn cho team — danh tính lấy từ tài khoản đăng nhập.'
+    chat:'Nhắn cho team — danh tính lấy từ tài khoản đăng nhập.',
+    intake:'Dán link Google Doc → AI phân tích → xác nhận → ghi vào sheet.'
   };
   document.querySelectorAll('.tab').forEach(function(t){
     t.onclick=function(){
@@ -715,5 +716,144 @@ function init(data){
     document.addEventListener(ev, ensureAudio, { passive:true });
   });
   window.addEventListener('focus', function(){ unread=0; cTitle(); });
+})();
+
+
+// === Intake tab ===
+(function(){
+  var COLS=['code','category','keyword','tags','summary_main','when_to_use','check','script_en',
+    'source_file','source_link','status','last_updated','hot','tree_code','node_id','node_type','options','flagged'];
+  var COL_LABEL={
+    code:'Code',category:'Category',keyword:'Keyword',tags:'Tags',
+    summary_main:'Tóm tắt',when_to_use:'Khi nào dùng',check:'Cần kiểm tra',
+    script_en:'Script EN',source_file:'File nguồn',source_link:'Link nguồn',
+    status:'Status',last_updated:'Cập nhật',hot:'Hot',
+    tree_code:'Tree code',node_id:'Node ID',node_type:'Node type',
+    options:'Options',flagged:'Flagged'
+  };
+
+  var currentRecords=[];
+
+  function $i(id){ return document.getElementById(id); }
+
+  function setStatus(msg, isErr){
+    var el=$i('intakeStatus'); if(!el) return;
+    el.textContent=msg;
+    el.className='intake-status'+(isErr?' intake-err':'');
+  }
+
+  function actionLabel(a){
+    if(a==='add') return '<span class="itag itag-add">ADD ON</span>';
+    if(a==='replace') return '<span class="itag itag-replace">REPLACE</span>';
+    return '<span class="itag itag-check">NEED-CHECK</span>';
+  }
+
+  function renderRecord(r, idx){
+    var rec=r.record;
+    var cols=COLS.filter(function(c){ return rec[c]; });
+    var rows=cols.map(function(c){
+      return '<tr><td class="ifield-k">'+esc(COL_LABEL[c]||c)+'</td><td class="ifield-v">'+esc(rec[c])+'</td></tr>';
+    }).join('');
+    return '<div class="irec irec-'+r.action+'" data-idx="'+idx+'">'+
+      '<div class="irec-hd">'+actionLabel(r.action)+
+      ' <span class="irec-code">'+esc(rec.code||'—')+'</span>'+
+      (r.note?'<span class="irec-note">'+esc(r.note)+'</span>':'')+
+      '</div>'+
+      '<table class="ifield-tbl">'+rows+'</table>'+
+      '</div>';
+  }
+
+  function renderResults(records){
+    var groups={add:[],replace:[],['need-check']:[]};
+    records.forEach(function(r,i){ (groups[r.action]||groups['need-check']).push({r:r,i:i}); });
+
+    var html='';
+    if(groups.add.length){
+      html+='<div class="iblock"><div class="iblock-hd iblock-add">ADD ON ('+groups.add.length+')</div>'+
+        groups.add.map(function(x){ return renderRecord(x.r,x.i); }).join('')+'</div>';
+    }
+    if(groups.replace.length){
+      html+='<div class="iblock"><div class="iblock-hd iblock-replace">REPLACE ('+groups.replace.length+')</div>'+
+        groups.replace.map(function(x){ return renderRecord(x.r,x.i); }).join('')+'</div>';
+    }
+    if(groups['need-check'].length){
+      html+='<div class="iblock"><div class="iblock-hd iblock-check">NEED-CHECK ('+groups['need-check'].length+') — sẽ bỏ qua</div>'+
+        groups['need-check'].map(function(x){ return renderRecord(x.r,x.i); }).join('')+'</div>';
+    }
+
+    var confirmable=groups.add.length+groups.replace.length;
+    if(confirmable>0){
+      html+='<div class="iconfirm-row">'+
+        '<button id="intakeConfirmBtn" class="intake-confirm-btn">Xác nhận ghi '+confirmable+' records vào sheet</button>'+
+        '</div>';
+    }
+    $i('intakeResult').innerHTML=html;
+    if(confirmable>0){
+      $i('intakeConfirmBtn').addEventListener('click', doConfirm);
+    }
+  }
+
+  function doAnalyze(){
+    if(!AUTH.token){ setStatus('Vui lòng đăng nhập trước.', true); return; }
+    var url=($i('intakeUrl').value||'').trim();
+    if(!url){ setStatus('Vui lòng nhập link Google Doc.', true); return; }
+
+    var btn=$i('intakeBtn');
+    btn.disabled=true; btn.textContent='Đang phân tích…';
+    setStatus('Đang đọc tài liệu và gọi AI…');
+    $i('intakeResult').innerHTML='';
+    currentRecords=[];
+
+    fetch('/api/intake',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({token:AUTH.token, docUrl:url})
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      btn.disabled=false; btn.textContent='Phân tích';
+      if(d.error){ setStatus('Lỗi: '+d.error, true); return; }
+      currentRecords=d.records||[];
+      setStatus('Phân tích xong — '+d.count+' records (kho có '+d.fpCount+' policies)');
+      renderResults(currentRecords);
+    })
+    .catch(function(e){
+      btn.disabled=false; btn.textContent='Phân tích';
+      setStatus('Lỗi kết nối: '+(e.message||'unknown'), true);
+    });
+  }
+
+  function doConfirm(){
+    if(!AUTH.token){ setStatus('Vui lòng đăng nhập trước.', true); return; }
+    var toWrite=currentRecords.filter(function(r){ return r.action==='add'||r.action==='replace'; });
+    if(!toWrite.length){ setStatus('Không có gì để ghi.', true); return; }
+
+    var btn=$i('intakeConfirmBtn');
+    btn.disabled=true; btn.textContent='Đang ghi…';
+
+    fetch('/api/data/bulk',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({token:AUTH.token, records:toWrite})
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(d.error){ btn.disabled=false; btn.textContent='Thử lại'; setStatus('Lỗi ghi: '+d.error, true); return; }
+      var added=(d.added||[]).length, replaced=(d.replaced||[]).length;
+      setStatus('Đã ghi thành công — '+added+' ADD ON, '+replaced+' REPLACE', false);
+      btn.parentNode.removeChild(btn);
+    })
+    .catch(function(e){
+      btn.disabled=false; btn.textContent='Thử lại';
+      setStatus('Lỗi kết nối: '+(e.message||'unknown'), true);
+    });
+  }
+
+  document.addEventListener('DOMContentLoaded', function(){
+    var btn=$i('intakeBtn');
+    if(btn) btn.addEventListener('click', doAnalyze);
+    var inp=$i('intakeUrl');
+    if(inp) inp.addEventListener('keydown', function(e){ if(e.key==='Enter') doAnalyze(); });
+  });
 })();
 

@@ -37,6 +37,7 @@
       <div class="tab on" data-pane="policies">Policies</div>
       <div class="tab" data-pane="process">Process</div>
       <div class="tab" data-pane="chat">Chat</div>
+      <div class="tab" data-pane="intake">Intake</div>
     </div>
 
     <!-- ══ POLICIES ══ -->
@@ -114,6 +115,22 @@
   </div>
 </div>
 
+  </div>
+
+  <!-- ══ INTAKE ══ -->
+  <div class="pane" id="pane-intake">
+    <div class="card pad intake-wrap">
+      <div class="intake-hd">
+        <div class="intake-title">Thêm Policy từ Google Doc</div>
+        <div class="intake-sub">Dán link Google Doc → AI phân tích → xem xét → ghi vào sheet</div>
+      </div>
+      <div class="intake-input-row">
+        <input id="intakeUrl" class="intake-url-in" placeholder="https://docs.google.com/document/d/..." autocomplete="off">
+        <button id="intakeBtn" class="intake-btn">Phân tích</button>
+      </div>
+      <div id="intakeStatus" class="intake-status"></div>
+      <div id="intakeResult"></div>
+    </div>
   </div>
 
   <div class="flag-toast" id="flagToast"></div>
