@@ -68,6 +68,7 @@ function doLogin(){
       if(window.Notification && Notification.permission==='default'){ try{ Notification.requestPermission(); }catch(e){} }
       btn.disabled=false; btn.textContent='Đăng nhập';
       hideAuth(); mountUserChip(res.name); loadApp();
+      if(window.startBgChatPoll) startBgChatPoll();
     })
     .withFailureHandler(function(e){
       btn.disabled=false; btn.textContent='Đăng nhập';
@@ -109,7 +110,7 @@ function mountUserChip(name){
 function authBoot(){
   var t=null,n=null;
   try{ t=sessionStorage.getItem('at_token'); n=sessionStorage.getItem('at_name'); }catch(e){}
-  if(t){ AUTH.token=t; AUTH.name=n; hideAuth(); mountUserChip(n||''); loadApp(); }
+  if(t){ AUTH.token=t; AUTH.name=n; hideAuth(); mountUserChip(n||''); loadApp(); if(window.startBgChatPoll) startBgChatPoll(); }
   else { showAuth(); }
 }
 
@@ -577,7 +578,9 @@ function init(data){
 // === Chat module ===
 
 (function(){
-  var room='cs-floor', muted=false, unread=0, primed=false, seen={}, pollT=null, actx=null, started=false;
+  var room='cs-floor', muted=false, unread=0, tabUnread=0, primed=false, seen={};
+  var pollT=null, bgPollT=null, actx=null, started=false;
+
   function $(id){ return document.getElementById(id); }
   function cColor(n){ var h=0; for(var i=0;i<n.length;i++) h=(h*31+n.charCodeAt(i))%360; return 'hsl('+h+' 52% 40%)'; }
   function cInit(n){ return (String(n).trim()[0]||'?').toUpperCase(); }
@@ -589,7 +592,7 @@ function init(data){
   }
   function cBeep(){
     ensureAudio();
-    if(!actx || actx.state!=='running') return;   // chưa unlock được thì thôi, không lỗi
+    if(!actx || actx.state!=='running') return;
     [[660,0],[880,.09]].forEach(function(p){
       var o=actx.createOscillator(), g=actx.createGain(); o.connect(g); g.connect(actx.destination);
       o.type='sine'; o.frequency.value=p[0]; var t=actx.currentTime+p[1];
@@ -600,9 +603,30 @@ function init(data){
   function cNotify(m){ if(window.Notification && Notification.permission==='granted'){ try{ new Notification('AirTalk · '+m.user,{body:m.text,tag:'airtalk-chat'}); }catch(e){} } }
   function cTitle(){ document.title=(unread>0?'('+unread+') ':'')+'AirTalk CS Assistant'; }
 
+  function isOnChatTab(){ var t=document.querySelector('.tab[data-pane="chat"]'); return t&&t.classList.contains('on'); }
+
+  function updateTabBadge(){
+    var chatTab=document.querySelector('.tab[data-pane="chat"]');
+    if(!chatTab) return;
+    var badge=chatTab.querySelector('.chat-unread-badge');
+    if(tabUnread>0){
+      if(!badge){ badge=document.createElement('span'); badge.className='chat-unread-badge'; chatTab.appendChild(badge); }
+      badge.textContent=tabUnread>99?'99+':String(tabUnread);
+    } else {
+      if(badge) badge.remove();
+    }
+  }
+
+  function countFresh(msgs){
+    var fresh=0;
+    msgs.forEach(function(m){ if(!seen[m.id]){ seen[m.id]=1; if(primed && m.user!==AUTH.name) fresh++; } });
+    return fresh;
+  }
+
   function cRenderMsgs(msgs){
-    var log=$('chatLog'); var near=log.scrollHeight-log.scrollTop-log.clientHeight<80;
-    if(!msgs.length){ log.innerHTML='<div class="chat-empty">Chưa có tin nào. Chào team một câu đi.</div>'; return; }
+    var log=$('chatLog'); if(!log) return;
+    var near=log.scrollHeight-log.scrollTop-log.clientHeight<80;
+    if(!msgs.length){ log.innerHTML='<div class="chat-empty">Chưa có tin nào. Chào team một câu đi.</div>'; primed=true; return; }
     log.innerHTML=msgs.map(function(m){
       var mine=m.user===AUTH.name;
       return '<div class="crow'+(mine?' mine':'')+'">'+
@@ -611,16 +635,19 @@ function init(data){
         '<div class="ctxt">'+esc(m.text)+'</div></div></div>';
     }).join('');
     if(near) log.scrollTop=log.scrollHeight;
-    var fresh=0;
-    msgs.forEach(function(m){ if(!seen[m.id]){ seen[m.id]=1; if(primed && m.user!==AUTH.name) fresh++; } });
-    if(fresh>0){ if(!muted) cBeep(); if(document.hidden){ unread+=fresh; cTitle(); cNotify(msgs[msgs.length-1]); } }
+    var fresh=countFresh(msgs);
+    if(fresh>0){
+      if(!muted) cBeep();
+      if(document.hidden){ unread+=fresh; cTitle(); cNotify(msgs[msgs.length-1]); }
+    }
     primed=true;
   }
   function cRenderPres(online){
-    $('chatOnline').textContent=online.length;
-    $('chatPres').innerHTML=online.map(function(n){
+    var el=$('chatOnline'); if(el) el.textContent=online.length;
+    var pel=$('chatPres'); if(!pel) return;
+    pel.innerHTML=online.map(function(n){
       return '<span class="pchip"><span class="pdot"></span>'+esc(n===AUTH.name?n+' (bạn)':n)+'</span>';
-    }).join('') || '<span class="pchip" style="border-style:dashed">Chưa ai khác online</span>';
+    }).join('')||'<span class="pchip" style="border-style:dashed">Chưa ai khác online</span>';
   }
 
   function cPoll(){
@@ -633,6 +660,24 @@ function init(data){
       })
       .chatPoll(AUTH.token, room);
   }
+
+  function bgPoll(){
+    if(!AUTH.token || started) return;
+    google.script.run
+      .withSuccessHandler(function(d){
+        if(!d) return;
+        var msgs=d.messages||[], fresh=countFresh(msgs);
+        if(fresh>0){
+          if(!muted) cBeep();
+          tabUnread+=fresh; updateTabBadge();
+          if(document.hidden){ unread+=fresh; cTitle(); cNotify(msgs[msgs.length-1]); }
+        }
+        if(!primed && msgs.length>0) primed=true;
+      })
+      .withFailureHandler(function(){})
+      .chatPoll(AUTH.token, room);
+  }
+
   function cSend(){
     var inp=$('chatMsg'), text=inp.value.trim();
     if(!text || !AUTH.token) return;
@@ -643,17 +688,23 @@ function init(data){
   window.startChat=function(){
     if(started || !AUTH.token) return;
     started=true;
+    clearInterval(bgPollT); bgPollT=null;
+    tabUnread=0; updateTabBadge();
     room=($('chatRoom').value.trim())||'cs-floor';
     $('chatMe').textContent=AUTH.name||'—';
     try{ actx=actx||new (window.AudioContext||window.webkitAudioContext)(); }catch(e){}
     if(actx && actx.state==='suspended'){ try{ actx.resume(); }catch(e){} }
-    primed=false; seen={};
+    primed=false;
     cPoll(); pollT=setInterval(cPoll, 2500);
   };
   window.stopChat=function(){
     if(!started) return;
     started=false; clearInterval(pollT);
     if(AUTH.token){ try{ google.script.run.chatLeave(AUTH.token, room); }catch(e){} }
+    if(AUTH.token && !bgPollT){ bgPollT=setInterval(bgPoll, 8000); }
+  };
+  window.startBgChatPoll=function(){
+    if(!bgPollT && AUTH.token && !started){ bgPollT=setInterval(bgPoll, 8000); }
   };
 
   $('chatSendBtn').addEventListener('click', cSend);
@@ -661,7 +712,7 @@ function init(data){
   $('chatRoom').addEventListener('change', function(){ if(started){ stopChat(); startChat(); } });
   $('chatSnd').addEventListener('click', function(){ muted=!muted; this.classList.toggle('on',!muted); this.textContent=muted?'🔕':'🔔'; });
   ['click','keydown','touchstart'].forEach(function(ev){
-  document.addEventListener(ev, ensureAudio, { passive:true });
+    document.addEventListener(ev, ensureAudio, { passive:true });
   });
   window.addEventListener('focus', function(){ unread=0; cTitle(); });
 })();

@@ -22,10 +22,13 @@
   .width-btn:hover{border-color:var(--green);background:var(--green-l)}
 
   .tab-bar{display:flex;border-bottom:2px solid var(--line);margin-bottom:16px}
-  .tab{padding:10px 22px;font-size:14px;font-weight:600;color:var(--muted);cursor:pointer;
+  .tab{position:relative;padding:10px 22px;font-size:14px;font-weight:600;color:var(--muted);cursor:pointer;
     border-bottom:2px solid transparent;margin-bottom:-2px;transition:.1s;user-select:none}
   .tab:hover{color:var(--green-d)}
   .tab.on{color:var(--green-d);border-bottom-color:var(--green)}
+  .chat-unread-badge{position:absolute;top:5px;right:4px;min-width:18px;height:18px;padding:0 5px;
+    border-radius:999px;background:var(--red);color:#fff;font-size:11px;font-weight:700;
+    display:inline-flex;align-items:center;justify-content:center;line-height:1;pointer-events:none;}
   .pane{display:none}
   .pane.on{display:block}
 
