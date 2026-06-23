@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+  <!-- Overlay đăng nhập (ẩn app cho tới khi login) -->
+  <!-- ════ MODULE: LOGIN (tự chứa CSS + markup + script) ════ -->
+
+
+<div class="auth-overlay" id="authOverlay">
+  <div class="auth-card">
+    <div class="auth-top"></div>
+    <div class="auth-body">
+      <div class="auth-logo"><span>AT</span>CS Assistant</div>
+      <div class="auth-sub">Đăng nhập để vào công cụ.</div>
+      <div class="auth-field"><label for="authUser">Tên hiển thị</label><input id="authUser" autocomplete="username"></div>
+      <!-- <div class="auth-field"><label for="authPass">Mật khẩu</label><input id="authPass" type="password" autocomplete="current-password"></div> -->
+      <button class="auth-btn" id="authBtn">Đăng nhập</button>
+      <div class="auth-err" id="authErr"></div>
+    </div>
+  </div>
+</div>
+
+  <div class="wrap" id="mainwrap">
+    <div class="topbar">
+      <div class="logo"><span>AT</span>CS Assistant</div>
+      <div class="hint" id="tabhint">Gõ keyword / code / từ khoá — lọc tức thì.</div>
+      <button class="width-btn" id="widthToggle">↔ Bề rộng: Mặc định</button>
+    </div>
+
+    <div class="tab-bar">
+      <div class="tab on" data-pane="policies">Policies</div>
+      <div class="tab" data-pane="process">Process</div>
+      <div class="tab" data-pane="chat">Chat</div>
+    </div>
+
+    <!-- ══ POLICIES ══ -->
+    <div class="pane on" id="pane-policies">
+      <div class="pol-grid" id="polGrid">
+        <div class="card pad facet" id="facet"></div>
+        <div class="gutter" id="g1"></div>
+        <div class="card pad">
+          <button class="toggle-btn" id="catToggle">‹ Ẩn Category</button>
+          <div class="searchbox">
+            <span class="ic">&#128269;</span>
+            <input id="q" placeholder="Tìm theo keyword, code, hoặc nội dung…" autocomplete="off">
+          </div>
+          <button class="scope-toggle" id="scopeToggle">Tìm trong &#9662;</button>
+          <div class="scopes" id="scopes"></div>
+          <div class="listbar">
+            <div class="count" id="count"></div>
+            <div class="density">
+              <span class="dchip on" data-d="compact">Gọn</span>
+              <span class="dchip" data-d="full">Đầy đủ</span>
+            </div>
+          </div>
+          <div class="listwrap"><div id="list"></div></div>
+        </div>
+        <div class="gutter" id="g2"></div>
+        <div class="card pad pol-detail" id="polDetail">
+          <div class="placeholder"><div class="big">&#129516;</div>Chọn một mục để xem chi tiết.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ PROCESS ══ -->
+    <div class="pane" id="pane-process">
+      <div class="card pad">
+        <div class="flow-bar">
+          <div id="flowChips"></div>
+          <div class="dim-bar">
+            <span class="dimchip on" id="dc-dim" onclick="setDimMode(true)">Dim</span>
+            <span class="dimchip" id="dc-all" onclick="setDimMode(false)">Hiện tất cả</span>
+          </div>
+        </div>
+        <div class="proc-wrap" id="procWrap">
+          <div class="proc-tree-col" id="procTree">
+            <div class="placeholder"><div class="big">&#128336;</div>Đang tải…</div>
+          </div>
+          <div class="gutter" id="gProc"></div>
+          <div class="proc-detail-col">
+            <div class="card pad" id="procDetail">
+              <div class="placeholder"><div class="big">&#128204;</div>Chọn một node để xem chi tiết.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ CHAT (pane #pane-chat đến từ file Chat) ══ -->
+    <!-- ════ MODULE: CHAT (tab, tự chứa CSS + markup + script) ════ -->
+
+
+<div class="pane" id="pane-chat">
+  <div class="card chat-card">
+    <div class="chat-hd">
+      <input class="chat-room-in" id="chatRoom" value="cs-floor" title="Mã phòng" maxlength="24">
+      <div class="chat-live"><span class="live-dot"></span><span id="chatOnline">0</span> online</div>
+      <div class="chat-me">Bạn: <b id="chatMe">—</b></div>
+      <button class="snd on" id="chatSnd" title="Âm báo">🔔</button>
+    </div>
+    <div class="chat-pres" id="chatPres"></div>
+    <div class="chat-log" id="chatLog"></div>
+    <div class="chat-comp">
+      <input id="chatMsg" placeholder="Nhắn cho team…" maxlength="500" autocomplete="off">
+      <button class="chat-send" id="chatSendBtn">Gửi</button>
+    </div>
+    <div class="chat-foot">Lịch sử tạm · giữ 60 tin gần nhất · poll 2.5s</div>
+  </div>
+</div>
+
+  </div>
+
+  <div class="flag-toast" id="flagToast"></div>
+
+  <!-- JS chính (init gọi sau khi login) -->
+  <script src="/scripts.js"></script>
+</body>
+</html>
