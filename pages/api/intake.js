@@ -2,6 +2,8 @@ import { redis } from '../../lib/redis';
 import { buildFingerprint } from '../../lib/sheets';
 import { google } from 'googleapis';
 
+export const config = { maxDuration: 60 };
+
 const COLS = [
   'code','category','keyword','tags','summary_main','when_to_use','check','script_en',
   'source_file','source_link','status','last_updated','hot','tree_code','node_id','node_type','options','flagged'
@@ -37,35 +39,38 @@ async function getFingerprint() {
   return fp;
 }
 
-async function callGroq(docText, existingCodes) {
-  const codeList = Object.keys(existingCodes).join(', ');
+const CHUNK_CHARS = 9000; // ~3000 tokens, leaves room for prompt + output
+
+function chunkText(text, size) {
+  const chunks = [];
+  for (let i = 0; i < text.length; i += size) {
+    chunks.push(text.slice(i, i + size));
+  }
+  return chunks;
+}
+
+async function callGroqChunk(chunk, chunkIdx, totalChunks, codeList, existingCodesCount) {
   const today = TODAY();
-
   const prompt = `Bạn là trợ lý xử lý policy cho AirTalk CS.
+Đây là phần ${chunkIdx + 1}/${totalChunks} của tài liệu.
 
-## Existing policy codes (${Object.keys(existingCodes).length} codes):
+## Existing policy codes (${existingCodesCount} codes):
 ${codeList}
 
-## Tài liệu mới:
-${docText.slice(0, 28000)}
+## Nội dung tài liệu (phần ${chunkIdx + 1}/${totalChunks}):
+${chunk}
 
 ## Nhiệm vụ:
-Đọc tài liệu, trích xuất từng tình huống/chính sách, cấu trúc thành records 18 cột:
+Trích xuất các tình huống/chính sách từ phần này → cấu trúc thành records 18 cột:
 code | category | keyword | tags | summary_main | when_to_use | check | script_en | source_file | source_link | status | last_updated | hot | tree_code | node_id | node_type | options | flagged
 
 Quy tắc:
-- code: chữ thường, dùng dấu gạch ngang (vd: esim-transfer). Flow node: {tree-code}_{nodeId}
-- status: luôn "needs-review"
-- last_updated: ${today}
-- source_file: tên file/tài liệu nguồn nếu biết
-- Các cột hot, tree_code, node_id, node_type, options, flagged: để trống nếu không rõ
+- code: chữ thường, dùng dấu gạch ngang (vd: esim-transfer)
+- status: luôn "needs-review", last_updated: ${today}
+- Phân loại: "add" (code mới), "replace" (code đã có), "need-check" (không chắc)
+- Nếu phần này không chứa policy nào rõ ràng, trả về []
 
-Phân loại mỗi record:
-- "add": code CHƯA CÓ trong existing codes → thêm mới
-- "replace": code ĐÃ CÓ trong existing codes → thay thế
-- "need-check": mâu thuẫn, thiếu thông tin, không chắc
-
-Trả về CHỈ một JSON array hợp lệ, không markdown, không text thêm:
+Trả về CHỈ JSON array, không markdown:
 [{"action":"add","note":"lý do","record":{"code":"...","category":"...","keyword":"...","tags":"...","summary_main":"...","when_to_use":"...","check":"...","script_en":"...","source_file":"...","source_link":"","status":"needs-review","last_updated":"${today}","hot":"","tree_code":"","node_id":"","node_type":"","options":"","flagged":""}}]`;
 
   const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -78,7 +83,7 @@ Trả về CHỈ một JSON array hợp lệ, không markdown, không text thêm
       model: 'llama-3.3-70b-versatile',
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.1,
-      max_tokens: 8192,
+      max_tokens: 4096,
     }),
   });
 
@@ -89,10 +94,31 @@ Trả về CHỈ một JSON array hợp lệ, không markdown, không text thêm
 
   const data = await res.json();
   const text = data.choices?.[0]?.message?.content || '';
-
   const m = text.match(/\[[\s\S]*\]/);
-  if (!m) throw new Error('AI không trả về JSON hợp lệ');
-  return JSON.parse(m[0]);
+  if (!m) return [];
+  try { return JSON.parse(m[0]); } catch { return []; }
+}
+
+async function callGroq(docText, existingCodes) {
+  const codeList = Object.keys(existingCodes).join(', ');
+  const chunks = chunkText(docText, CHUNK_CHARS);
+
+  const allRecords = [];
+  const seenCodes = new Set();
+
+  for (let i = 0; i < chunks.length; i++) {
+    const records = await callGroqChunk(chunks[i], i, chunks.length, codeList, Object.keys(existingCodes).length);
+    for (const r of records) {
+      const code = r.record?.code;
+      if (code && seenCodes.has(code)) continue; // deduplicate
+      if (code) seenCodes.add(code);
+      allRecords.push(r);
+    }
+    // Small delay between chunks to respect TPM limits
+    if (i < chunks.length - 1) await new Promise(r => setTimeout(r, 1500));
+  }
+
+  return allRecords;
 }
 
 export default async function handler(req, res) {
