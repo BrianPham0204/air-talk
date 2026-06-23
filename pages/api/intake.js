@@ -43,13 +43,16 @@ async function callGemini(docText, existingCodes) {
   const today = TODAY();
   const codeList = Object.keys(existingCodes).join(', ');
 
+  const docSlice = docText.slice(0, 30000);
+  const truncated = docText.length > 30000 ? `\n[Tài liệu bị cắt bớt — đã xử lý ${docSlice.length}/${docText.length} ký tự]` : '';
+
   const prompt = `Bạn là trợ lý xử lý policy cho AirTalk CS.
 
 ## Existing policy codes (${Object.keys(existingCodes).length} codes):
 ${codeList}
 
-## Tài liệu mới:
-${docText.slice(0, 80000)}
+## Tài liệu mới:${truncated}
+${docSlice}
 
 ## Nhiệm vụ:
 Đọc tài liệu, trích xuất từng tình huống/chính sách, cấu trúc thành records 18 cột:
