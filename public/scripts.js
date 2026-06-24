@@ -822,7 +822,12 @@ function init(data){
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({token:AUTH.token, docUrl:url})
     })
-    .then(function(r){ return r.json(); })
+    .then(function(r){
+      return r.text().then(function(t){
+        try{ return JSON.parse(t); }
+        catch(e){ return {error: r.status>=500 ? 'Server timeout — thử lại sau 30 giây' : t.slice(0,120)}; }
+      });
+    })
     .then(function(d){
       btn.disabled=false; btn.textContent='Phân tích';
       if(d.error){ setStatus('Lỗi: '+d.error, true); return; }

@@ -75,7 +75,7 @@ Trả về CHỈ JSON array, không markdown, không text thêm:
   ];
 
   for (const model of MODELS) {
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 2; attempt++) {
       const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -94,15 +94,12 @@ Trả về CHỈ JSON array, không markdown, không text thêm:
       if (res.status === 429) {
         const errJson = await res.json().catch(() => ({}));
         const retryAfter = errJson?.error?.metadata?.retry_after_seconds;
-        const wait = retryAfter ? Math.ceil(retryAfter) * 1000 + 500 : 5000;
+        const wait = Math.min(retryAfter ? Math.ceil(retryAfter) * 1000 + 300 : 3000, 4000);
         await new Promise(r => setTimeout(r, wait));
         continue;
       }
 
-      if (!res.ok) {
-        // Try next model
-        break;
-      }
+      if (!res.ok) break; // try next model
 
       const data = await res.json();
       const text = data.choices?.[0]?.message?.content || '';
@@ -112,7 +109,7 @@ Trả về CHỈ JSON array, không markdown, không text thêm:
     }
   }
 
-  throw new Error('Tất cả AI models đều tạm thời không khả dụng. Thử lại sau 1 phút.');
+  throw new Error('Tất cả AI models tạm thời bị giới hạn. Vui lòng thử lại sau 1 phút.');
 }
 
 export default async function handler(req, res) {
