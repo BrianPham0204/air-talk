@@ -68,31 +68,51 @@ Quy tắc:
 Trả về CHỈ JSON array, không markdown, không text thêm:
 [{"action":"add","note":"lý do","record":{"code":"...","category":"...","keyword":"...","tags":"...","summary_main":"...","when_to_use":"...","check":"...","script_en":"...","source_file":"...","source_link":"","status":"needs-review","last_updated":"${today}","hot":"","tree_code":"","node_id":"","node_type":"","options":"","flagged":""}}]`;
 
-  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-      'HTTP-Referer': 'https://air-talk-ten.vercel.app',
-    },
-    body: JSON.stringify({
-      model: 'meta-llama/llama-3.3-70b-instruct:free',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.1,
-      max_tokens: 8192,
-    }),
-  });
+  const MODELS = [
+    'meta-llama/llama-3.3-70b-instruct:free',
+    'google/gemma-4-31b-it:free',
+    'openai/gpt-oss-120b:free',
+  ];
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`OpenRouter ${res.status}: ${err.slice(0, 400)}`);
+  for (const model of MODELS) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          'HTTP-Referer': 'https://air-talk-ten.vercel.app',
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.1,
+          max_tokens: 8192,
+        }),
+      });
+
+      if (res.status === 429) {
+        const errJson = await res.json().catch(() => ({}));
+        const retryAfter = errJson?.error?.metadata?.retry_after_seconds;
+        const wait = retryAfter ? Math.ceil(retryAfter) * 1000 + 500 : 5000;
+        await new Promise(r => setTimeout(r, wait));
+        continue;
+      }
+
+      if (!res.ok) {
+        // Try next model
+        break;
+      }
+
+      const data = await res.json();
+      const text = data.choices?.[0]?.message?.content || '';
+      const m = text.match(/\[[\s\S]*\]/);
+      if (!m) throw new Error('AI không trả về JSON hợp lệ. Raw: ' + text.slice(0, 200));
+      return JSON.parse(m[0]);
+    }
   }
 
-  const data = await res.json();
-  const text = data.choices?.[0]?.message?.content || '';
-  const m = text.match(/\[[\s\S]*\]/);
-  if (!m) throw new Error('AI không trả về JSON hợp lệ. Raw: ' + text.slice(0, 200));
-  return JSON.parse(m[0]);
+  throw new Error('Tất cả AI models đều tạm thời không khả dụng. Thử lại sau 1 phút.');
 }
 
 export default async function handler(req, res) {
