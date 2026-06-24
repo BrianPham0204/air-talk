@@ -39,20 +39,18 @@ async function getFingerprint() {
   return fp;
 }
 
-async function callGemini(docText, existingCodes) {
+async function callAI(docText, existingCodes) {
   const today = TODAY();
   const codeList = Object.keys(existingCodes).join(', ');
-
-  const docSlice = docText.slice(0, 30000);
-  const truncated = docText.length > 30000 ? `\n[Tài liệu bị cắt bớt — đã xử lý ${docSlice.length}/${docText.length} ký tự]` : '';
+  const docSlice = docText.slice(0, 60000);
 
   const prompt = `Bạn là trợ lý xử lý policy cho AirTalk CS.
 
 ## Existing policy codes (${Object.keys(existingCodes).length} codes):
 ${codeList}
 
-## Tài liệu mới:${truncated}
-${docSlice}
+## Tài liệu mới:
+${docSlice}${docText.length > 60000 ? `\n[...đã cắt bớt, còn ${docText.length - 60000} ký tự]` : ''}
 
 ## Nhiệm vụ:
 Đọc tài liệu, trích xuất từng tình huống/chính sách, cấu trúc thành records 18 cột:
@@ -70,27 +68,30 @@ Quy tắc:
 Trả về CHỈ JSON array, không markdown, không text thêm:
 [{"action":"add","note":"lý do","record":{"code":"...","category":"...","keyword":"...","tags":"...","summary_main":"...","when_to_use":"...","check":"...","script_en":"...","source_file":"...","source_link":"","status":"needs-review","last_updated":"${today}","hot":"","tree_code":"","node_id":"","node_type":"","options":"","flagged":""}}]`;
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 8192 },
-      }),
-    }
-  );
+  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+      'HTTP-Referer': 'https://air-talk-ten.vercel.app',
+    },
+    body: JSON.stringify({
+      model: 'microsoft/phi-3-mini-128k-instruct:free',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.1,
+      max_tokens: 8192,
+    }),
+  });
 
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`Gemini ${res.status}: ${err.slice(0, 400)}`);
+    throw new Error(`OpenRouter ${res.status}: ${err.slice(0, 400)}`);
   }
 
   const data = await res.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  const text = data.choices?.[0]?.message?.content || '';
   const m = text.match(/\[[\s\S]*\]/);
-  if (!m) throw new Error('AI không trả về JSON hợp lệ');
+  if (!m) throw new Error('AI không trả về JSON hợp lệ. Raw: ' + text.slice(0, 200));
   return JSON.parse(m[0]);
 }
 
@@ -123,7 +124,7 @@ export default async function handler(req, res) {
 
   let records;
   try {
-    records = await callGemini(docText, fp.codes);
+    records = await callAI(docText, fp.codes);
   } catch (e) {
     return res.status(500).json({ error: 'Lỗi AI: ' + e.message });
   }
