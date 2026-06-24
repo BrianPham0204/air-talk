@@ -75,8 +75,12 @@ Trả về CHỈ JSON array, không markdown, không text thêm:
   ];
 
   for (const model of MODELS) {
-    for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 15000);
+
       const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        signal: ctrl.signal,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -89,27 +93,21 @@ Trả về CHỈ JSON array, không markdown, không text thêm:
           temperature: 0.1,
           max_tokens: 8192,
         }),
-      });
+      }).finally(() => clearTimeout(timer));
 
-      if (res.status === 429) {
-        const errJson = await res.json().catch(() => ({}));
-        const retryAfter = errJson?.error?.metadata?.retry_after_seconds;
-        const wait = Math.min(retryAfter ? Math.ceil(retryAfter) * 1000 + 300 : 3000, 4000);
-        await new Promise(r => setTimeout(r, wait));
-        continue;
-      }
-
-      if (!res.ok) break; // try next model
+      if (!res.ok) continue; // skip to next model
 
       const data = await res.json();
       const text = data.choices?.[0]?.message?.content || '';
       const m = text.match(/\[[\s\S]*\]/);
-      if (!m) throw new Error('AI không trả về JSON hợp lệ. Raw: ' + text.slice(0, 200));
+      if (!m) continue;
       return JSON.parse(m[0]);
+    } catch {
+      continue; // timeout or network error → next model
     }
   }
 
-  throw new Error('Tất cả AI models tạm thời bị giới hạn. Vui lòng thử lại sau 1 phút.');
+  throw new Error('Các AI models đang bận. Thử lại sau 30 giây.');
 }
 
 export default async function handler(req, res) {
