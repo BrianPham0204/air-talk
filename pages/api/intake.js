@@ -42,7 +42,7 @@ async function getFingerprint() {
 async function callAI(docText, existingCodes) {
   const today = TODAY();
   const codeList = Object.keys(existingCodes).join(', ');
-  const docSlice = docText.slice(0, 60000);
+  const docSlice = docText.slice(0, 40000);
 
   const prompt = `Bạn là trợ lý xử lý policy cho AirTalk CS.
 
@@ -76,7 +76,7 @@ Trả về CHỈ JSON array, không markdown, không text thêm:
       'HTTP-Referer': 'https://air-talk-ten.vercel.app',
     },
     body: JSON.stringify({
-      model: 'microsoft/phi-3-mini-128k-instruct:free',
+      model: 'mistralai/mistral-7b-instruct:free',
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.1,
       max_tokens: 8192,
