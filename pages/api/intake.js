@@ -76,7 +76,7 @@ Trả về CHỈ JSON array, không markdown, không text thêm:
       'HTTP-Referer': 'https://air-talk-ten.vercel.app',
     },
     body: JSON.stringify({
-      model: 'mistralai/mistral-7b-instruct:free',
+      model: 'meta-llama/llama-3.3-70b-instruct:free',
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.1,
       max_tokens: 8192,
