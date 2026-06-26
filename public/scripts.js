@@ -813,11 +813,25 @@ function init(data){
     return 'Bạn là trợ lý xử lý policy cho AirTalk CS.\n\n'+
       '## Existing policy codes ('+Object.keys(codes).length+' codes):\n'+codeList+'\n\n'+
       '## Tài liệu mới:\n'+docText+'\n\n'+
-      '## Nhiệm vụ:\nĐọc tài liệu, trích xuất từng tình huống/chính sách, cấu trúc thành records 18 cột:\n'+
+      '## Nhiệm vụ:\nĐọc tài liệu, trích xuất từng tình huống/chính sách/bước quy trình, cấu trúc thành records 18 cột:\n'+
       'code | category | keyword | tags | summary_main | when_to_use | check | script_en | source_file | source_link | status | last_updated | hot | tree_code | node_id | node_type | options | flagged\n\n'+
-      'Quy tắc:\n- code: chữ thường, dùng dấu gạch ngang (vd: esim-transfer)\n'+
+      '## Quy tắc chung:\n'+
       '- status: luôn "needs-review", last_updated: '+today+'\n'+
       '- "add": code CHƯA CÓ → thêm mới; "replace": code ĐÃ CÓ → thay thế; "need-check": không chắc\n\n'+
+      '## Policies thông thường:\n'+
+      '- code: chữ thường, dùng dấu gạch ngang (vd: esim-transfer)\n'+
+      '- tree_code, node_id, node_type, options: để trống\n\n'+
+      '## Flow nodes (khi tài liệu mô tả quy trình / cây quyết định):\n'+
+      '- tree_code: tên flow (vd: port-out-flow)\n'+
+      '- node_id: id node trong flow (vd: n1, n2, L_yes, L_no)\n'+
+      '- code: tree_code + "_" + node_id (vd: port-out-flow_n1)\n'+
+      '- node_type: "start" | "question" | "action" | "end"\n'+
+      '- options: danh sách lựa chọn tại node quyết định, mỗi option một dòng (vd: "Có → port-out-flow_n2\\nKhông → port-out-flow_end")\n'+
+      '- summary_main: mô tả node này làm gì\n'+
+      '- when_to_use: điều kiện dẫn đến node này\n'+
+      '- script_en: câu hỏi/thông báo CS nói tại node này\n\n'+
+      '## Ví dụ flow node:\n'+
+      '{"code":"port-out-flow_n1","tree_code":"port-out-flow","node_id":"n1","node_type":"question","summary_main":"Verify if customer wants to port out","when_to_use":"Customer requests port out","script_en":"Are you sure you want to transfer your number to another carrier?","options":"Yes → port-out-flow_n2\\nNo → port-out-flow_end"}\n\n'+
       'Trả về CHỈ JSON array, không markdown:\n'+
       '[{"action":"add","note":"lý do","record":{"code":"...","category":"...","keyword":"...","tags":"...","summary_main":"...","when_to_use":"...","check":"...","script_en":"...","source_file":"...","source_link":"","status":"needs-review","last_updated":"'+today+'","hot":"","tree_code":"","node_id":"","node_type":"","options":"","flagged":""}}]';
   }
