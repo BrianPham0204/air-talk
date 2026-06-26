@@ -806,14 +806,49 @@ function init(data){
     }
   }
 
+  var OR_MODELS=['meta-llama/llama-3.3-70b-instruct:free','google/gemma-4-31b-it:free','openai/gpt-oss-120b:free'];
+
+  function buildPrompt(docText, codes, today){
+    var codeList=Object.keys(codes).join(', ');
+    return 'Bạn là trợ lý xử lý policy cho AirTalk CS.\n\n'+
+      '## Existing policy codes ('+Object.keys(codes).length+' codes):\n'+codeList+'\n\n'+
+      '## Tài liệu mới:\n'+docText+'\n\n'+
+      '## Nhiệm vụ:\nĐọc tài liệu, trích xuất từng tình huống/chính sách, cấu trúc thành records 18 cột:\n'+
+      'code | category | keyword | tags | summary_main | when_to_use | check | script_en | source_file | source_link | status | last_updated | hot | tree_code | node_id | node_type | options | flagged\n\n'+
+      'Quy tắc:\n- code: chữ thường, dùng dấu gạch ngang (vd: esim-transfer)\n'+
+      '- status: luôn "needs-review", last_updated: '+today+'\n'+
+      '- "add": code CHƯA CÓ → thêm mới; "replace": code ĐÃ CÓ → thay thế; "need-check": không chắc\n\n'+
+      'Trả về CHỈ JSON array, không markdown:\n'+
+      '[{"action":"add","note":"lý do","record":{"code":"...","category":"...","keyword":"...","tags":"...","summary_main":"...","when_to_use":"...","check":"...","script_en":"...","source_file":"...","source_link":"","status":"needs-review","last_updated":"'+today+'","hot":"","tree_code":"","node_id":"","node_type":"","options":"","flagged":""}}]';
+  }
+
+  function callOrModel(prompt, orKey, modelIdx){
+    if(modelIdx>=OR_MODELS.length) return Promise.reject(new Error('Tất cả AI models đang bận. Thử lại sau 1 phút.'));
+    var model=OR_MODELS[modelIdx];
+    return fetch('https://openrouter.ai/api/v1/chat/completions',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+orKey,'HTTP-Referer':'https://air-talk-ten.vercel.app'},
+      body:JSON.stringify({model:model,messages:[{role:'user',content:prompt}],temperature:0.1,max_tokens:8192})
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(d.error){ return callOrModel(prompt, orKey, modelIdx+1); }
+      var text=d.choices&&d.choices[0]&&d.choices[0].message&&d.choices[0].message.content||'';
+      var m=text.match(/\[[\s\S]*\]/);
+      if(!m) return callOrModel(prompt, orKey, modelIdx+1);
+      return JSON.parse(m[0]);
+    })
+    .catch(function(){ return callOrModel(prompt, orKey, modelIdx+1); });
+  }
+
   function doAnalyze(){
     if(!AUTH.token){ setStatus('Vui lòng đăng nhập trước.', true); return; }
     var url=($i('intakeUrl').value||'').trim();
     if(!url){ setStatus('Vui lòng nhập link Google Doc.', true); return; }
 
     var btn=$i('intakeBtn');
-    btn.disabled=true; btn.textContent='Đang phân tích…';
-    setStatus('Đang đọc tài liệu và gọi AI…');
+    btn.disabled=true; btn.textContent='Đang tải tài liệu…';
+    setStatus('Bước 1/2 — Đang đọc Google Doc…');
     $i('intakeResult').innerHTML='';
     currentRecords=[];
 
@@ -822,22 +857,28 @@ function init(data){
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({token:AUTH.token, docUrl:url})
     })
-    .then(function(r){
-      return r.text().then(function(t){
-        try{ return JSON.parse(t); }
-        catch(e){ return {error: r.status>=500 ? 'Server timeout — thử lại sau 30 giây' : t.slice(0,120)}; }
-      });
-    })
+    .then(function(r){ return r.json(); })
     .then(function(d){
-      btn.disabled=false; btn.textContent='Phân tích';
-      if(d.error){ setStatus('Lỗi: '+d.error, true); return; }
-      currentRecords=d.records||[];
-      setStatus('Phân tích xong — '+d.count+' records (kho có '+d.fpCount+' policies)');
-      renderResults(currentRecords);
+      if(d.error){ btn.disabled=false; btn.textContent='Phân tích'; setStatus('Lỗi: '+d.error, true); return; }
+      btn.textContent='Đang phân tích…';
+      setStatus('Bước 2/2 — AI đang xử lý'+(d.truncated?' (doc dài, đã cắt 40K ký tự đầu)':'')+'…');
+      var prompt=buildPrompt(d.docText, d.codes, d.today);
+      return callOrModel(prompt, d.orKey, 0).then(function(records){
+        btn.disabled=false; btn.textContent='Phân tích';
+        currentRecords=records||[];
+        var COLS=['code','category','keyword','tags','summary_main','when_to_use','check','script_en','source_file','source_link','status','last_updated','hot','tree_code','node_id','node_type','options','flagged'];
+        currentRecords=currentRecords.map(function(r){
+          var rec=r.record||{};
+          COLS.forEach(function(c){ if(rec[c]==null) rec[c]=''; });
+          return {action:r.action||'need-check',note:r.note||'',record:rec};
+        });
+        setStatus('Phân tích xong — '+currentRecords.length+' records (kho có '+d.fpCount+' policies)');
+        renderResults(currentRecords);
+      });
     })
     .catch(function(e){
       btn.disabled=false; btn.textContent='Phân tích';
-      setStatus('Lỗi kết nối: '+(e.message||'unknown'), true);
+      setStatus('Lỗi: '+(e.message||'unknown'), true);
     });
   }
 

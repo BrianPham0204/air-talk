@@ -2,14 +2,7 @@ import { redis } from '../../lib/redis';
 import { buildFingerprint } from '../../lib/sheets';
 import { google } from 'googleapis';
 
-export const config = { maxDuration: 60 };
-
-const COLS = [
-  'code','category','keyword','tags','summary_main','when_to_use','check','script_en',
-  'source_file','source_link','status','last_updated','hot','tree_code','node_id','node_type','options','flagged'
-];
-
-const TODAY = () => new Date().toISOString().slice(0, 10);
+export const config = { maxDuration: 30 };
 
 function extractDocId(url) {
   const m = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
@@ -39,77 +32,7 @@ async function getFingerprint() {
   return fp;
 }
 
-async function callAI(docText, existingCodes) {
-  const today = TODAY();
-  const codeList = Object.keys(existingCodes).join(', ');
-  const docSlice = docText.slice(0, 40000);
-
-  const prompt = `Bạn là trợ lý xử lý policy cho AirTalk CS.
-
-## Existing policy codes (${Object.keys(existingCodes).length} codes):
-${codeList}
-
-## Tài liệu mới:
-${docSlice}${docText.length > 60000 ? `\n[...đã cắt bớt, còn ${docText.length - 60000} ký tự]` : ''}
-
-## Nhiệm vụ:
-Đọc tài liệu, trích xuất từng tình huống/chính sách, cấu trúc thành records 18 cột:
-code | category | keyword | tags | summary_main | when_to_use | check | script_en | source_file | source_link | status | last_updated | hot | tree_code | node_id | node_type | options | flagged
-
-Quy tắc:
-- code: chữ thường, dùng dấu gạch ngang (vd: esim-transfer). Flow node: {tree-code}_{nodeId}
-- status: luôn "needs-review", last_updated: ${today}
-- source_file: tên file/tài liệu nguồn nếu biết
-- hot, tree_code, node_id, node_type, options, flagged: để trống nếu không rõ
-- "add": code CHƯA CÓ trong existing codes → thêm mới
-- "replace": code ĐÃ CÓ trong existing codes → thay thế
-- "need-check": mâu thuẫn hoặc không chắc
-
-Trả về CHỈ JSON array, không markdown, không text thêm:
-[{"action":"add","note":"lý do","record":{"code":"...","category":"...","keyword":"...","tags":"...","summary_main":"...","when_to_use":"...","check":"...","script_en":"...","source_file":"...","source_link":"","status":"needs-review","last_updated":"${today}","hot":"","tree_code":"","node_id":"","node_type":"","options":"","flagged":""}}]`;
-
-  const MODELS = [
-    'meta-llama/llama-3.3-70b-instruct:free',
-    'google/gemma-4-31b-it:free',
-    'openai/gpt-oss-120b:free',
-  ];
-
-  for (const model of MODELS) {
-    try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 15000);
-
-      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        signal: ctrl.signal,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-          'HTTP-Referer': 'https://air-talk-ten.vercel.app',
-        },
-        body: JSON.stringify({
-          model,
-          messages: [{ role: 'user', content: prompt }],
-          temperature: 0.1,
-          max_tokens: 8192,
-        }),
-      }).finally(() => clearTimeout(timer));
-
-      if (!res.ok) continue; // skip to next model
-
-      const data = await res.json();
-      const text = data.choices?.[0]?.message?.content || '';
-      const m = text.match(/\[[\s\S]*\]/);
-      if (!m) continue;
-      return JSON.parse(m[0]);
-    } catch {
-      continue; // timeout or network error → next model
-    }
-  }
-
-  throw new Error('Các AI models đang bận. Thử lại sau 30 giây.');
-}
-
+// This endpoint only fetches doc + fingerprint — AI call happens in the browser
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
 
@@ -137,18 +60,13 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'Lỗi lấy fingerprint: ' + e.message });
   }
 
-  let records;
-  try {
-    records = await callAI(docText, fp.codes);
-  } catch (e) {
-    return res.status(500).json({ error: 'Lỗi AI: ' + e.message });
-  }
-
-  records = records.map(r => {
-    const rec = r.record || {};
-    COLS.forEach(c => { if (rec[c] == null) rec[c] = ''; });
-    return { action: r.action || 'need-check', note: r.note || '', record: rec };
+  return res.json({
+    ok: true,
+    docText: docText.slice(0, 40000),
+    truncated: docText.length > 40000,
+    codes: fp.codes,
+    fpCount: fp.count,
+    today: new Date().toISOString().slice(0, 10),
+    orKey: process.env.OPENROUTER_API_KEY,
   });
-
-  return res.json({ ok: true, records, count: records.length, fpCount: fp.count });
 }
