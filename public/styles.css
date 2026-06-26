@@ -282,3 +282,32 @@
   .intake-confirm-btn{padding:11px 28px;border:none;border-radius:11px;background:var(--green-d);color:#fff;font-weight:700;font-size:14px;cursor:pointer}
   .intake-confirm-btn:hover{background:#1e6640}
   .intake-confirm-btn:disabled{opacity:.6;cursor:default}
+
+  /* ── Intake 2-pass skeleton UI ── */
+  .iskel-wrap{margin-bottom:24px}
+  .iskel-title{font-size:12px;font-weight:700;color:var(--green-d);text-transform:uppercase;letter-spacing:.06em;padding:8px 12px;background:var(--green-l);border:1px solid #b8dfc9;border-radius:8px;margin-bottom:12px}
+  .iskel-tree{background:#fff;border:1px solid var(--line);border-radius:12px;margin-bottom:10px;overflow:hidden}
+  .iskel-tree-hd{font-size:13px;font-weight:700;color:var(--ink);padding:10px 14px;background:var(--hero);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+  .iskel-count{font-size:10px;font-weight:700;background:var(--green);color:#fff;border-radius:999px;padding:2px 8px}
+  .iskel-node{border-bottom:1px solid var(--line);padding:10px 14px}
+  .iskel-node:last-of-type{border-bottom:none}
+  .iskel-node-hd{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .iskel-ntype{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:3px 8px;border-radius:999px;color:#fff;flex-shrink:0}
+  .iskel-nid{font-size:12px;font-weight:700;font-family:ui-monospace,Menlo,monospace;color:var(--ink);flex-shrink:0}
+  .iskel-nsum{font-size:13px;color:var(--muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .iskel-edit-btn{margin-left:auto;font-size:11px;padding:3px 10px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--green-d);cursor:pointer;flex-shrink:0}
+  .iskel-edit-btn:hover{background:var(--green-l);border-color:var(--green)}
+  .iskel-opts{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;padding-left:4px}
+  .iskel-opt{font-size:11px;padding:2px 8px;background:var(--blue-l);color:var(--blue);border-radius:999px}
+  .iskel-form{background:var(--hero);border-top:1px solid var(--line);padding:12px 14px;margin:8px -14px -10px}
+  .iskel-field{margin-bottom:8px}
+  .iskel-field label{display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:4px}
+  .iskel-field input,.iskel-field select,.iskel-field textarea{width:100%;padding:7px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;outline:none;box-sizing:border-box;background:#fff}
+  .iskel-field input:focus,.iskel-field select:focus,.iskel-field textarea:focus{border-color:var(--green);box-shadow:0 0 0 2px rgba(63,157,109,.12)}
+  .iskel-field textarea{resize:vertical;min-height:60px}
+  .iskel-actions{padding:12px 14px;border-top:1px solid var(--line);background:var(--hero);display:flex;gap:10px;justify-content:flex-end}
+  .intake-pass2-btn{padding:10px 20px;border:none;border-radius:10px;background:var(--blue);color:#fff;font-weight:700;font-size:13px;cursor:pointer}
+  .intake-pass2-btn:hover{background:#1251a0}
+  .intake-pass2-btn:disabled{opacity:.6;cursor:default}
+  .iskel-pol-hd{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;padding:10px 0 8px;border-top:2px dashed var(--line)}
+  .iskel-pass2-done{font-size:13px;font-weight:600;color:var(--green-d);padding:8px 12px;background:var(--green-l);border:1px solid #b8dfc9;border-radius:8px;margin-bottom:12px}

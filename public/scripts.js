@@ -745,7 +745,9 @@ function init(data){
     options:'Options',flagged:'Flagged'
   };
 
-  var currentRecords=[];
+  // State for 2-pass workflow
+  var currentSkeleton=[], currentPolicies=[];
+  var currentDocText='', currentOrKey='', currentCodes={}, currentToday='';
 
   function $i(id){ return document.getElementById(id); }
 
@@ -776,39 +778,65 @@ function init(data){
       '</div>';
   }
 
-  function renderResults(records){
-    var groups={add:[],replace:[],['need-check']:[]};
-    records.forEach(function(r,i){ (groups[r.action]||groups['need-check']).push({r:r,i:i}); });
+  function doConfirmRecords(records, btn){
+    if(!AUTH.token){ setStatus('Vui lòng đăng nhập trước.', true); return; }
+    btn.disabled=true; btn.textContent='Đang ghi…';
+    fetch('/api/data/bulk',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({token:AUTH.token, records:records})
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(d.error){ btn.disabled=false; btn.textContent='Thử lại'; setStatus('Lỗi ghi: '+d.error, true); return; }
+      var added=(d.added||[]).length, replaced=(d.replaced||[]).length;
+      setStatus('Đã ghi thành công — '+added+' ADD ON, '+replaced+' REPLACE');
+      if(btn.parentNode) btn.parentNode.removeChild(btn);
+    })
+    .catch(function(e){
+      btn.disabled=false; btn.textContent='Thử lại';
+      setStatus('Lỗi kết nối: '+(e.message||'unknown'), true);
+    });
+  }
 
+  function addConfirmBtn(records, container){
+    var confirmable=records.filter(function(r){ return r.action==='add'||r.action==='replace'; });
+    if(!confirmable.length) return;
+    var row=document.createElement('div');
+    row.className='iconfirm-row';
+    var btn=document.createElement('button');
+    btn.className='intake-confirm-btn';
+    btn.textContent='Xác nhận ghi '+confirmable.length+' records vào sheet';
+    btn.addEventListener('click', function(){ doConfirmRecords(confirmable, btn); });
+    row.appendChild(btn);
+    container.appendChild(row);
+  }
+
+  function renderResultsIn(records, container){
+    var groups={add:[],replace:[],other:[]};
+    records.forEach(function(r,i){
+      if(r.action==='add') groups.add.push({r:r,i:i});
+      else if(r.action==='replace') groups.replace.push({r:r,i:i});
+      else groups.other.push({r:r,i:i});
+    });
     var html='';
-    if(groups.add.length){
+    if(groups.add.length)
       html+='<div class="iblock"><div class="iblock-hd iblock-add">ADD ON ('+groups.add.length+')</div>'+
-        groups.add.map(function(x){ return renderRecord(x.r,x.i); }).join('')+'</div>';
-    }
-    if(groups.replace.length){
+        groups.add.map(function(x){return renderRecord(x.r,x.i);}).join('')+'</div>';
+    if(groups.replace.length)
       html+='<div class="iblock"><div class="iblock-hd iblock-replace">REPLACE ('+groups.replace.length+')</div>'+
-        groups.replace.map(function(x){ return renderRecord(x.r,x.i); }).join('')+'</div>';
-    }
-    if(groups['need-check'].length){
-      html+='<div class="iblock"><div class="iblock-hd iblock-check">NEED-CHECK ('+groups['need-check'].length+') — sẽ bỏ qua</div>'+
-        groups['need-check'].map(function(x){ return renderRecord(x.r,x.i); }).join('')+'</div>';
-    }
-
-    var confirmable=groups.add.length+groups.replace.length;
-    if(confirmable>0){
-      html+='<div class="iconfirm-row">'+
-        '<button id="intakeConfirmBtn" class="intake-confirm-btn">Xác nhận ghi '+confirmable+' records vào sheet</button>'+
-        '</div>';
-    }
-    $i('intakeResult').innerHTML=html;
-    if(confirmable>0){
-      $i('intakeConfirmBtn').addEventListener('click', doConfirm);
-    }
+        groups.replace.map(function(x){return renderRecord(x.r,x.i);}).join('')+'</div>';
+    if(groups.other.length)
+      html+='<div class="iblock"><div class="iblock-hd iblock-check">NEED-CHECK ('+groups.other.length+') — sẽ bỏ qua</div>'+
+        groups.other.map(function(x){return renderRecord(x.r,x.i);}).join('')+'</div>';
+    container.innerHTML=html;
+    addConfirmBtn(records, container);
   }
 
   var OR_MODELS=['meta-llama/llama-3.3-70b-instruct:free','google/gemma-4-31b-it:free','openai/gpt-oss-120b:free'];
 
-  function buildPrompt(docText, codes, today){
+  // Pass 1: extract structure only for flow nodes (detail fields filled in Pass 2)
+  function buildPass1Prompt(docText, codes, today){
     var codeList=Object.keys(codes).join(', ');
     return 'Bạn là trợ lý xử lý policy cho AirTalk CS.\n\n'+
       '## Existing policy codes ('+Object.keys(codes).length+' codes):\n'+codeList+'\n\n'+
@@ -818,22 +846,43 @@ function init(data){
       '## Quy tắc chung:\n'+
       '- status: luôn "needs-review", last_updated: '+today+'\n'+
       '- "add": code CHƯA CÓ → thêm mới; "replace": code ĐÃ CÓ → thay thế; "need-check": không chắc\n\n'+
-      '## Policies thông thường:\n'+
+      '## Policies thông thường: fill đầy đủ tất cả các cột.\n'+
       '- code: chữ thường, dùng dấu gạch ngang (vd: esim-transfer)\n'+
       '- tree_code, node_id, node_type, options: để trống\n\n'+
-      '## Flow nodes (khi tài liệu mô tả quy trình / cây quyết định):\n'+
+      '## Flow nodes — Pass 1 (chỉ cần cấu trúc, chi tiết sẽ fill ở Pass 2):\n'+
       '- tree_code: tên flow (vd: port-out-flow)\n'+
-      '- node_id: id node trong flow (vd: n1, n2, L_yes, L_no)\n'+
-      '- code: tree_code + "_" + node_id (vd: port-out-flow_n1)\n'+
-      '- node_type: "start" | "question" | "action" | "end"\n'+
-      '- options: danh sách lựa chọn tại node quyết định, mỗi option một dòng (vd: "Có → port-out-flow_n2\\nKhông → port-out-flow_end")\n'+
-      '- summary_main: mô tả node này làm gì\n'+
-      '- when_to_use: điều kiện dẫn đến node này\n'+
-      '- script_en: câu hỏi/thông báo CS nói tại node này\n\n'+
-      '## Ví dụ flow node:\n'+
-      '{"code":"port-out-flow_n1","tree_code":"port-out-flow","node_id":"n1","node_type":"question","summary_main":"Verify if customer wants to port out","when_to_use":"Customer requests port out","script_en":"Are you sure you want to transfer your number to another carrier?","options":"Yes → port-out-flow_n2\\nNo → port-out-flow_end"}\n\n'+
+      '- node_id: id node trong flow (vd: n1, n2)\n'+
+      '- code: tree_code+"_"+node_id (vd: port-out-flow_n1)\n'+
+      '- node_type: "start"|"question"|"action"|"end"\n'+
+      '- options: "Label → next_node_id" mỗi dòng 1 nhánh\n'+
+      '- summary_main: 1 câu ngắn mô tả node\n'+
+      '- Bỏ qua (để trống): keyword, tags, when_to_use, check, script_en\n\n'+
       'Trả về CHỈ JSON array, không markdown:\n'+
-      '[{"action":"add","note":"lý do","record":{"code":"...","category":"...","keyword":"...","tags":"...","summary_main":"...","when_to_use":"...","check":"...","script_en":"...","source_file":"...","source_link":"","status":"needs-review","last_updated":"'+today+'","hot":"","tree_code":"","node_id":"","node_type":"","options":"","flagged":""}}]';
+      '[{"action":"add","note":"lý do","record":{"code":"...","category":"...","keyword":"","tags":"","summary_main":"...","when_to_use":"","check":"","script_en":"","source_file":"...","source_link":"","status":"needs-review","last_updated":"'+today+'","hot":"","tree_code":"","node_id":"","node_type":"","options":"","flagged":""}}]';
+  }
+
+  // Pass 2: given confirmed skeleton, fill content fields for each node
+  function buildPass2Prompt(skeleton, docText, today){
+    var skelDesc=skeleton.map(function(r){
+      var rec=r.record;
+      return rec.code+'|'+rec.node_type+'|opts:'+rec.options+'|sum:'+rec.summary_main;
+    }).join('\n');
+    return 'Bạn là trợ lý AirTalk CS — Pass 2: fill chi tiết cho flow nodes.\n\n'+
+      '## Skeleton đã xác nhận:\n'+skelDesc+'\n\n'+
+      '## Tài liệu nguồn:\n'+docText+'\n\n'+
+      '## Nhiệm vụ: với mỗi node, tìm trong tài liệu và fill:\n'+
+      '- keyword: từ khoá tìm kiếm (phân cách bằng dấu phẩy)\n'+
+      '- tags: nhãn phân loại\n'+
+      '- summary_main: mô tả chi tiết hơn (có thể giữ nguyên nếu đã đủ)\n'+
+      '- when_to_use: điều kiện / tình huống dẫn đến node này\n'+
+      '- check: điều CS cần kiểm tra trước khi hành động\n'+
+      '- script_en: câu nói/hỏi CS dùng tại node này\n'+
+      '- category, source_file: nếu có trong tài liệu\n'+
+      'Giữ nguyên: code, tree_code, node_id, node_type, options\n'+
+      'Không tìm được → để trống, ĐỪNG bịa\n'+
+      'status="needs-review", last_updated="'+today+'"\n\n'+
+      'Trả về CHỈ JSON array REPLACE:\n'+
+      '[{"action":"replace","note":"pass2 fill","record":{"code":"...","category":"...","keyword":"...","tags":"...","summary_main":"...","when_to_use":"...","check":"...","script_en":"...","source_file":"...","source_link":"","status":"needs-review","last_updated":"'+today+'","hot":"","tree_code":"...","node_id":"...","node_type":"...","options":"...","flagged":""}}]';
   }
 
   function callOrModel(prompt, orKey, modelIdx){
@@ -855,6 +904,109 @@ function init(data){
     .catch(function(){ return callOrModel(prompt, orKey, modelIdx+1); });
   }
 
+  function normalizeRecords(records){
+    return (records||[]).map(function(r){
+      var rec=r.record||{};
+      COLS.forEach(function(c){ if(rec[c]==null) rec[c]=''; });
+      return {action:r.action||'need-check', note:r.note||'', record:rec};
+    });
+  }
+
+  // ── Skeleton rendering ──
+
+  function renderSkeletonNode(r, idx){
+    var rec=r.record;
+    var typeColors={start:'#3f9d6d',question:'#185FA5',action:'#b8770f',end:'#A32D2D'};
+    var color=typeColors[rec.node_type]||'#6e7f76';
+    var optLines=(rec.options||'').split('\n').filter(Boolean).map(function(l){
+      return '<span class="iskel-opt">'+esc(l)+'</span>';
+    }).join('');
+    return '<div class="iskel-node" id="skel-node-'+idx+'">'+
+      '<div class="iskel-node-hd">'+
+      '<span class="iskel-ntype" style="background:'+color+'">'+esc(rec.node_type||'?')+'</span>'+
+      '<span class="iskel-nid">'+esc(rec.node_id||'')+'</span>'+
+      '<span class="iskel-nsum">'+esc(rec.summary_main||'')+'</span>'+
+      '<button class="iskel-edit-btn" id="skel-edit-'+idx+'">Sửa</button>'+
+      '</div>'+
+      (optLines?'<div class="iskel-opts">'+optLines+'</div>':'')+
+      '<div class="iskel-form" id="skel-form-'+idx+'" style="display:none">'+
+      '<div class="iskel-field"><label>Node type</label>'+
+      '<select id="skel-type-'+idx+'">'+
+      ['start','question','action','end'].map(function(t){
+        return '<option value="'+t+'"'+(rec.node_type===t?' selected':'')+'>'+t+'</option>';
+      }).join('')+
+      '</select></div>'+
+      '<div class="iskel-field"><label>Summary (1 câu)</label>'+
+      '<input id="skel-sum-'+idx+'" value="'+esc(rec.summary_main||'')+'"></div>'+
+      '<div class="iskel-field"><label>Options (1 dòng/nhánh, vd: Có → n2)</label>'+
+      '<textarea id="skel-opts-'+idx+'" rows="3">'+esc(rec.options||'')+'</textarea></div>'+
+      '</div></div>';
+  }
+
+  function renderSkeleton(flowRecords, container){
+    // Group nodes by tree_code
+    var trees={};
+    flowRecords.forEach(function(r,i){
+      var tc=r.record.tree_code||'flow';
+      if(!trees[tc]) trees[tc]=[];
+      trees[tc].push({r:r,idx:i});
+    });
+
+    var html='<div class="iskel-wrap">'+
+      '<div class="iskel-title">Cấu trúc Flow — Kiểm tra và chỉnh sửa trước khi fill chi tiết</div>';
+    Object.keys(trees).forEach(function(tc){
+      html+='<div class="iskel-tree">'+
+        '<div class="iskel-tree-hd">'+esc(tc)+'<span class="iskel-count">'+trees[tc].length+' nodes</span></div>';
+      trees[tc].forEach(function(x){ html+=renderSkeletonNode(x.r, x.idx); });
+      html+='</div>';
+    });
+    html+='<div class="iskel-actions">'+
+      '<button id="intakePass2Btn" class="intake-pass2-btn">⚡ Fill chi tiết (Pass 2)</button>'+
+      '</div></div>';
+    container.innerHTML=html;
+
+    // Attach edit toggle + live-save listeners
+    flowRecords.forEach(function(r,i){
+      var editBtn=$i('skel-edit-'+i), form=$i('skel-form-'+i);
+      if(editBtn&&form){
+        editBtn.addEventListener('click', function(){
+          var open=form.style.display!=='none';
+          form.style.display=open?'none':'block';
+          editBtn.textContent=open?'Sửa':'Đóng';
+        });
+      }
+      [['skel-type-','node_type'],['skel-sum-','summary_main'],['skel-opts-','options']].forEach(function(pair){
+        var el=$i(pair[0]+i);
+        if(el) el.addEventListener('input', function(){ currentSkeleton[i].record[pair[1]]=el.value; });
+      });
+    });
+    $i('intakePass2Btn').addEventListener('click', doPass2);
+  }
+
+  function doPass2(){
+    var btn=$i('intakePass2Btn');
+    if(btn){ btn.disabled=true; btn.textContent='AI đang fill chi tiết…'; }
+    setStatus('Pass 2 — đang fill chi tiết cho '+currentSkeleton.length+' flow nodes…');
+
+    var prompt=buildPass2Prompt(currentSkeleton, currentDocText, currentToday);
+    callOrModel(prompt, currentOrKey, 0)
+    .then(function(records){
+      var recs=normalizeRecords(records);
+      var iskelSec=$i('iskelSection');
+      if(iskelSec){
+        iskelSec.innerHTML='<div class="iskel-pass2-done">Pass 2 hoàn tất — '+recs.length+' nodes đã fill chi tiết</div>';
+        renderResultsIn(recs, iskelSec);
+      }
+      setStatus('Pass 2 xong — '+recs.length+' flow nodes + '+currentPolicies.length+' policies sẵn sàng ghi');
+    })
+    .catch(function(e){
+      if(btn){ btn.disabled=false; btn.textContent='⚡ Fill chi tiết (Pass 2)'; }
+      setStatus('Lỗi Pass 2: '+(e.message||'unknown'), true);
+    });
+  }
+
+  // ── Main analyze flow ──
+
   function doAnalyze(){
     if(!AUTH.token){ setStatus('Vui lòng đăng nhập trước.', true); return; }
     var url=($i('intakeUrl').value||'').trim();
@@ -864,7 +1016,7 @@ function init(data){
     btn.disabled=true; btn.textContent='Đang tải tài liệu…';
     setStatus('Bước 1/2 — Đang đọc Google Doc…');
     $i('intakeResult').innerHTML='';
-    currentRecords=[];
+    currentSkeleton=[]; currentPolicies=[];
 
     fetch('/api/intake',{
       method:'POST',
@@ -874,51 +1026,46 @@ function init(data){
     .then(function(r){ return r.json(); })
     .then(function(d){
       if(d.error){ btn.disabled=false; btn.textContent='Phân tích'; setStatus('Lỗi: '+d.error, true); return; }
+      currentDocText=d.docText; currentOrKey=d.orKey; currentCodes=d.codes||{}; currentToday=d.today;
       btn.textContent='Đang phân tích…';
       setStatus('Bước 2/2 — AI đang xử lý'+(d.truncated?' (doc dài, đã cắt 40K ký tự đầu)':'')+'…');
-      var prompt=buildPrompt(d.docText, d.codes, d.today);
-      return callOrModel(prompt, d.orKey, 0).then(function(records){
+      return callOrModel(buildPass1Prompt(d.docText, d.codes, d.today), d.orKey, 0).then(function(records){
         btn.disabled=false; btn.textContent='Phân tích';
-        currentRecords=records||[];
-        var COLS=['code','category','keyword','tags','summary_main','when_to_use','check','script_en','source_file','source_link','status','last_updated','hot','tree_code','node_id','node_type','options','flagged'];
-        currentRecords=currentRecords.map(function(r){
-          var rec=r.record||{};
-          COLS.forEach(function(c){ if(rec[c]==null) rec[c]=''; });
-          return {action:r.action||'need-check',note:r.note||'',record:rec};
-        });
-        setStatus('Phân tích xong — '+currentRecords.length+' records (kho có '+d.fpCount+' policies)');
-        renderResults(currentRecords);
+        var all=normalizeRecords(records);
+        var flowRecords=all.filter(function(r){ return r.record.tree_code; });
+        var policyRecords=all.filter(function(r){ return !r.record.tree_code; });
+        currentSkeleton=flowRecords; currentPolicies=policyRecords;
+
+        var resultEl=$i('intakeResult');
+        resultEl.innerHTML='';
+
+        if(flowRecords.length>0){
+          setStatus('Phân tích xong — '+flowRecords.length+' flow nodes + '+policyRecords.length+' policies (kho: '+d.fpCount+')');
+          var iskelSec=document.createElement('div');
+          iskelSec.id='iskelSection';
+          resultEl.appendChild(iskelSec);
+          renderSkeleton(flowRecords, iskelSec);
+
+          if(policyRecords.length>0){
+            var ipolSec=document.createElement('div');
+            ipolSec.id='ipolSection';
+            ipolSec.style.marginTop='28px';
+            var polHd=document.createElement('div');
+            polHd.className='iskel-pol-hd';
+            polHd.textContent='Policies thông thường ('+policyRecords.length+')';
+            ipolSec.appendChild(polHd);
+            resultEl.appendChild(ipolSec);
+            renderResultsIn(policyRecords, ipolSec);
+          }
+        } else {
+          setStatus('Phân tích xong — '+all.length+' records (kho: '+d.fpCount+' policies)');
+          renderResultsIn(all, resultEl);
+        }
       });
     })
     .catch(function(e){
       btn.disabled=false; btn.textContent='Phân tích';
       setStatus('Lỗi: '+(e.message||'unknown'), true);
-    });
-  }
-
-  function doConfirm(){
-    if(!AUTH.token){ setStatus('Vui lòng đăng nhập trước.', true); return; }
-    var toWrite=currentRecords.filter(function(r){ return r.action==='add'||r.action==='replace'; });
-    if(!toWrite.length){ setStatus('Không có gì để ghi.', true); return; }
-
-    var btn=$i('intakeConfirmBtn');
-    btn.disabled=true; btn.textContent='Đang ghi…';
-
-    fetch('/api/data/bulk',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({token:AUTH.token, records:toWrite})
-    })
-    .then(function(r){ return r.json(); })
-    .then(function(d){
-      if(d.error){ btn.disabled=false; btn.textContent='Thử lại'; setStatus('Lỗi ghi: '+d.error, true); return; }
-      var added=(d.added||[]).length, replaced=(d.replaced||[]).length;
-      setStatus('Đã ghi thành công — '+added+' ADD ON, '+replaced+' REPLACE', false);
-      btn.parentNode.removeChild(btn);
-    })
-    .catch(function(e){
-      btn.disabled=false; btn.textContent='Thử lại';
-      setStatus('Lỗi kết nối: '+(e.message||'unknown'), true);
     });
   }
 
