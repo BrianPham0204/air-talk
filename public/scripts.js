@@ -1058,7 +1058,7 @@ function init(data){
             renderResultsIn(policyRecords, ipolSec);
           }
         } else {
-          setStatus('Phân tích xong — '+all.length+' records (kho: '+d.fpCount+' policies)');
+          setStatus('Phân tích xong — '+all.length+' records · không phát hiện flow nodes, bỏ qua skeleton (kho: '+d.fpCount+')');
           renderResultsIn(all, resultEl);
         }
       });
