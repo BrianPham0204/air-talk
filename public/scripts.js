@@ -747,7 +747,7 @@ function init(data){
 
   // State for 2-pass workflow
   var currentSkeleton=[], currentPolicies=[];
-  var currentDocText='', currentOrKey='', currentCodes={}, currentToday='';
+  var currentDocText='', currentOrKey='', currentCodes={}, currentToday='', currentDocUrl='';
 
   function $i(id){ return document.getElementById(id); }
 
@@ -763,11 +763,16 @@ function init(data){
     return '<span class="itag itag-check">NEED-CHECK</span>';
   }
 
+  var REQUIRED_DISPLAY=['code','category','keyword','tags','summary_main','when_to_use','check','script_en','source_file','source_link'];
+
   function renderRecord(r, idx){
     var rec=r.record;
-    var cols=COLS.filter(function(c){ return rec[c]; });
+    var cols=COLS.filter(function(c){ return REQUIRED_DISPLAY.indexOf(c)>=0 || rec[c]; });
     var rows=cols.map(function(c){
-      return '<tr><td class="ifield-k">'+esc(COL_LABEL[c]||c)+'</td><td class="ifield-v">'+esc(rec[c])+'</td></tr>';
+      var val=rec[c]||'';
+      var isEmpty=!val && REQUIRED_DISPLAY.indexOf(c)>=0;
+      var tdStyle=isEmpty?' style="color:#bbb;font-style:italic"':'';
+      return '<tr><td class="ifield-k">'+esc(COL_LABEL[c]||c)+'</td><td class="ifield-v"'+tdStyle+'>'+(val?esc(val):'—')+'</td></tr>';
     }).join('');
     return '<div class="irec irec-'+r.action+'" data-idx="'+idx+'">'+
       '<div class="irec-hd">'+actionLabel(r.action)+
@@ -836,7 +841,7 @@ function init(data){
   var OR_MODELS=['meta-llama/llama-3.3-70b-instruct:free','google/gemma-4-31b-it:free','openai/gpt-oss-120b:free'];
 
   // Pass 1: extract structure only for flow nodes (detail fields filled in Pass 2)
-  function buildPass1Prompt(docText, codes, today){
+  function buildPass1Prompt(docText, codes, today, docUrl){
     var codeList=Object.keys(codes).join(', ');
     return 'Bạn là trợ lý xử lý policy cho AirTalk CS.\n\n'+
       '## Existing policy codes ('+Object.keys(codes).length+' codes):\n'+codeList+'\n\n'+
@@ -846,8 +851,18 @@ function init(data){
       '## Quy tắc chung:\n'+
       '- status: luôn "needs-review", last_updated: '+today+'\n'+
       '- "add": code CHƯA CÓ → thêm mới; "replace": code ĐÃ CÓ → thay thế; "need-check": không chắc\n\n'+
-      '## Policies thông thường: fill đầy đủ tất cả các cột.\n'+
-      '- code: chữ thường, dùng dấu gạch ngang (vd: esim-transfer)\n'+
+      '## Policies thông thường — BẮT BUỘC fill đầy đủ 10 trường sau:\n'+
+      '- code: chữ thường, dấu gạch ngang (vd: esim-transfer)\n'+
+      '- category: nhóm chức năng (vd: device, billing, account, port)\n'+
+      '- keyword: 3-6 từ tiếng Anh mô tả ngắn gọn policy này\n'+
+      '- tags: 2-4 nhãn phân cách bằng dấu phẩy (vd: "esim, transfer, device, activation") — BẮT BUỘC\n'+
+      '- summary_main: tóm tắt nội dung chính 2-4 câu\n'+
+      '- when_to_use: tối thiểu 1 tình huống cụ thể khi CS cần dùng policy này (vd: "Khách muốn chuyển eSIM sang điện thoại mới") — BẮT BUỘC\n'+
+      '- check: những gì CS phải xác nhận trước khi hành động, tối thiểu 1-3 điểm (vd: "Tài khoản đang active * Device đã unlock") — BẮT BUỘC\n'+
+      '- script_en: đoạn script tiếng Anh CS nói với khách, tối thiểu 1-2 câu — BẮT BUỘC\n'+
+      '- source_file: tên/tiêu đề tài liệu nguồn\n'+
+      '- source_link: '+docUrl+'\n'+
+      '⚠ tags, when_to_use, check, script_en PHẢI CÓ GIÁ TRỊ. Nếu tài liệu không nói rõ, suy luận hợp lý từ context. KHÔNG để trống 4 trường này.\n'+
       '- tree_code, node_id, node_type, options: để trống\n\n'+
       '## Flow nodes — Pass 1 (chỉ cần cấu trúc, chi tiết sẽ fill ở Pass 2):\n'+
       '- tree_code: tên flow (vd: port-out-flow)\n'+
@@ -858,11 +873,11 @@ function init(data){
       '- summary_main: 1 câu ngắn mô tả node\n'+
       '- Bỏ qua (để trống): keyword, tags, when_to_use, check, script_en\n\n'+
       'Trả về CHỈ JSON array, không markdown:\n'+
-      '[{"action":"add","note":"lý do","record":{"code":"...","category":"...","keyword":"","tags":"","summary_main":"...","when_to_use":"","check":"","script_en":"","source_file":"...","source_link":"","status":"needs-review","last_updated":"'+today+'","hot":"","tree_code":"","node_id":"","node_type":"","options":"","flagged":""}}]';
+      '[{"action":"add","note":"lý do","record":{"code":"...","category":"...","keyword":"...","tags":"...","summary_main":"...","when_to_use":"...","check":"...","script_en":"...","source_file":"...","source_link":"'+docUrl+'","status":"needs-review","last_updated":"'+today+'","hot":"","tree_code":"","node_id":"","node_type":"","options":"","flagged":""}}]';
   }
 
   // Pass 2: given confirmed skeleton, fill content fields for each node
-  function buildPass2Prompt(skeleton, docText, today){
+  function buildPass2Prompt(skeleton, docText, today, docUrl){
     var skelDesc=skeleton.map(function(r){
       var rec=r.record;
       return rec.code+'|'+rec.node_type+'|opts:'+rec.options+'|sum:'+rec.summary_main;
@@ -878,11 +893,12 @@ function init(data){
       '- check: điều CS cần kiểm tra trước khi hành động\n'+
       '- script_en: câu nói/hỏi CS dùng tại node này\n'+
       '- category, source_file: nếu có trong tài liệu\n'+
+      '- source_link: '+docUrl+'\n'+
       'Giữ nguyên: code, tree_code, node_id, node_type, options\n'+
       'Không tìm được → để trống, ĐỪNG bịa\n'+
       'status="needs-review", last_updated="'+today+'"\n\n'+
       'Trả về CHỈ JSON array REPLACE:\n'+
-      '[{"action":"replace","note":"pass2 fill","record":{"code":"...","category":"...","keyword":"...","tags":"...","summary_main":"...","when_to_use":"...","check":"...","script_en":"...","source_file":"...","source_link":"","status":"needs-review","last_updated":"'+today+'","hot":"","tree_code":"...","node_id":"...","node_type":"...","options":"...","flagged":""}}]';
+      '[{"action":"replace","note":"pass2 fill","record":{"code":"...","category":"...","keyword":"...","tags":"...","summary_main":"...","when_to_use":"...","check":"...","script_en":"...","source_file":"...","source_link":"'+docUrl+'","status":"needs-review","last_updated":"'+today+'","hot":"","tree_code":"...","node_id":"...","node_type":"...","options":"...","flagged":""}}]';
   }
 
   function callOrModel(prompt, orKey, modelIdx){
@@ -988,7 +1004,7 @@ function init(data){
     if(btn){ btn.disabled=true; btn.textContent='AI đang fill chi tiết…'; }
     setStatus('Pass 2 — đang fill chi tiết cho '+currentSkeleton.length+' flow nodes…');
 
-    var prompt=buildPass2Prompt(currentSkeleton, currentDocText, currentToday);
+    var prompt=buildPass2Prompt(currentSkeleton, currentDocText, currentToday, currentDocUrl);
     callOrModel(prompt, currentOrKey, 0)
     .then(function(records){
       var recs=normalizeRecords(records);
@@ -1016,7 +1032,7 @@ function init(data){
     btn.disabled=true; btn.textContent='Đang tải tài liệu…';
     setStatus('Bước 1/2 — Đang đọc Google Doc…');
     $i('intakeResult').innerHTML='';
-    currentSkeleton=[]; currentPolicies=[];
+    currentSkeleton=[]; currentPolicies=[]; currentDocUrl=url;
 
     fetch('/api/intake',{
       method:'POST',
@@ -1029,9 +1045,10 @@ function init(data){
       currentDocText=d.docText; currentOrKey=d.orKey; currentCodes=d.codes||{}; currentToday=d.today;
       btn.textContent='Đang phân tích…';
       setStatus('Bước 2/2 — AI đang xử lý'+(d.truncated?' (doc dài, đã cắt 40K ký tự đầu)':'')+'…');
-      return callOrModel(buildPass1Prompt(d.docText, d.codes, d.today), d.orKey, 0).then(function(records){
+      return callOrModel(buildPass1Prompt(d.docText, d.codes, d.today, url), d.orKey, 0).then(function(records){
         btn.disabled=false; btn.textContent='Phân tích';
         var all=normalizeRecords(records);
+        all.forEach(function(r){ if(!r.record.source_link) r.record.source_link=url; });
         var flowRecords=all.filter(function(r){ return r.record.tree_code; });
         var policyRecords=all.filter(function(r){ return !r.record.tree_code; });
         currentSkeleton=flowRecords; currentPolicies=policyRecords;
