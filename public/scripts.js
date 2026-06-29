@@ -772,7 +772,8 @@ function init(data){
       var val=rec[c]||'';
       var isEmpty=!val && REQUIRED_DISPLAY.indexOf(c)>=0;
       var tdStyle=isEmpty?' style="color:#bbb;font-style:italic"':'';
-      return '<tr><td class="ifield-k">'+esc(COL_LABEL[c]||c)+'</td><td class="ifield-v"'+tdStyle+'>'+(val?esc(val):'—')+'</td></tr>';
+      var display=val?(c==='source_link'?'<a href="'+esc(val)+'" target="_blank">'+esc(val)+'</a>':esc(val)):'—';
+      return '<tr><td class="ifield-k">'+esc(COL_LABEL[c]||c)+'</td><td class="ifield-v"'+tdStyle+'>'+display+'</td></tr>';
     }).join('');
     return '<div class="irec irec-'+r.action+'" data-idx="'+idx+'">'+
       '<div class="irec-hd">'+actionLabel(r.action)+
@@ -1048,7 +1049,7 @@ function init(data){
       return callOrModel(buildPass1Prompt(d.docText, d.codes, d.today, url), d.orKey, 0).then(function(records){
         btn.disabled=false; btn.textContent='Phân tích';
         var all=normalizeRecords(records);
-        all.forEach(function(r){ if(!r.record.source_link) r.record.source_link=url; });
+        all.forEach(function(r){ r.record.source_link=url; });
         var flowRecords=all.filter(function(r){ return r.record.tree_code; });
         var policyRecords=all.filter(function(r){ return !r.record.tree_code; });
         currentSkeleton=flowRecords; currentPolicies=policyRecords;
